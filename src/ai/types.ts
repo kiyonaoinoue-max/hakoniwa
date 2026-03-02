@@ -54,6 +54,20 @@ export interface FortuneTriggerState {
   lastFortuneDate: string;  // 最後に占いを出した日付 (YYYY-MM-DD)
 }
 
+export interface Recommendation {
+  id: string;
+  date: string;               // YYYY-MM-DD
+  type: 'activity' | 'food' | 'music' | 'general';
+  content: string;            // おすすめ内容
+  reason: string;             // なぜこれをおすすめしたか
+  basedOn: string[];          // ["weather", "mood", "pattern"]
+  timestamp: number;
+}
+
+export interface RecommendationTriggerState {
+  lastRecommendationDate: string; // 最後におすすめを出した日付 (YYYY-MM-DD)
+}
+
 export interface BrainState {
   episodes: EpisodicMemory[];
   semantics: Record<string, Semantics>;
@@ -64,6 +78,8 @@ export interface BrainState {
   mealLog: MealLogEntry[];
   mealTrigger: MealTriggerState;
   fortuneTrigger: FortuneTriggerState;
+  recommendations: Recommendation[];
+  recommendationTrigger: RecommendationTriggerState;
   currentEmotion?: string;
   currentIntensity?: number;
 }

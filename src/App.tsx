@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { memoryManager } from './ai/memory';
 import { Brain } from './ai/brain';
+import { weatherManager } from './ai/weather';
+import type { WeatherData } from './ai/weather';
 import { ChatInterface } from './components/ChatInterface';
 import { HakoniwaSphere } from './components/HakoniwaSphere';
 import { Atmosphere } from './components/Atmosphere';
@@ -15,6 +17,7 @@ function App() {
   const [brainState, setBrainState] = useState<BrainState | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(memoryManager.isDriveConnected());
   const [isInitializing, setIsInitializing] = useState(false);
+  const [weather, setWeather] = useState<WeatherData | null>(null);
 
   useEffect(() => {
     // If already authenticated (e.g., token persisted or just connected), initialize memory
@@ -23,6 +26,11 @@ function App() {
       const init = async () => {
         setIsInitializing(true);
         await memoryManager.initialize();
+
+        // Fetch weather
+        const weatherData = await weatherManager.fetchWeather();
+        if (weatherData && isMounted) setWeather(weatherData);
+
         if (isMounted) {
           setBrainState({ ...brain.getMemoryState() });
           setIsInitializing(false);
@@ -39,6 +47,11 @@ function App() {
               setTimeout(async () => {
                 const fortuneMessage = await brain.checkFortuneTrigger();
                 if (fortuneMessage && isMounted) setBrainState({ ...brain.getMemoryState() });
+
+                setTimeout(async () => {
+                  const recMessage = await brain.checkRecommendationTrigger();
+                  if (recMessage && isMounted) setBrainState({ ...brain.getMemoryState() });
+                }, 500);
               }, 500);
             }, 500);
           }, 1000);
@@ -88,6 +101,32 @@ function App() {
           />
 
           <div className="md:hidden text-xs text-slate-500 mb-2">Hakoniwa Core</div>
+
+          {/* Weather Card */}
+          {weather && (
+            <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4">
+              <h3 className="text-slate-300 font-medium mb-2 text-sm uppercase tracking-wider">Weather</h3>
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">{weather.weatherEmoji}</span>
+                <div>
+                  <div className="text-white text-lg font-bold">{weather.temperature}°C</div>
+                  <div className="text-slate-400 text-xs">{weather.weatherLabel}</div>
+                </div>
+              </div>
+              {weather.precipitationProbability > 0 && (
+                <div className="mt-2 text-xs text-blue-300 flex items-center gap-1">
+                  <span>💧</span>
+                  <span>降水確率 {weather.precipitationProbability}%</span>
+                </div>
+              )}
+              {weather.windSpeed > 15 && (
+                <div className="mt-1 text-xs text-slate-400 flex items-center gap-1">
+                  <span>💨</span>
+                  <span>風速 {weather.windSpeed}km/h</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* User Model Card */}
           <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4 flex flex-col h-40 md:h-48 overflow-hidden">

@@ -1,4 +1,4 @@
-import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry } from './types';
+import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation } from './types';
 
 const STORAGE_KEY = 'hakoniwa_ai_memory_v1';
 
@@ -17,6 +17,10 @@ const INITIAL_STATE: BrainState = {
     },
     fortuneTrigger: {
         lastFortuneDate: ''
+    },
+    recommendations: [],
+    recommendationTrigger: {
+        lastRecommendationDate: ''
     }
 };
 
@@ -108,6 +112,11 @@ export class MemoryManager {
             fortuneTrigger: {
                 ...INITIAL_STATE.fortuneTrigger,
                 ...(parsed.fortuneTrigger || {})
+            },
+            recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
+            recommendationTrigger: {
+                ...INITIAL_STATE.recommendationTrigger,
+                ...(parsed.recommendationTrigger || {})
             }
         };
     }
@@ -427,6 +436,33 @@ export class MemoryManager {
 
     public getFortuneTriggerState() {
         return this.state.fortuneTrigger;
+    }
+
+    // --- Recommendation ---
+    public addRecommendation(rec: Omit<Recommendation, 'id' | 'timestamp'>): void {
+        const entry: Recommendation = {
+            ...rec,
+            id: crypto.randomUUID(),
+            timestamp: Date.now()
+        };
+        this.state.recommendations.push(entry);
+        if (this.state.recommendations.length > 50) {
+            this.state.recommendations = this.state.recommendations.slice(-50);
+        }
+        this.save();
+    }
+
+    public getRecentRecommendations(limit: number = 5): Recommendation[] {
+        return this.state.recommendations.slice(-limit);
+    }
+
+    public setRecommendationShown(date: string): void {
+        this.state.recommendationTrigger.lastRecommendationDate = date;
+        this.save();
+    }
+
+    public getRecommendationTriggerState() {
+        return this.state.recommendationTrigger;
     }
 }
 

@@ -1,5 +1,6 @@
 import { MemoryManager } from './memory';
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
+import { weatherManager } from './weather';
 
 
 export class Brain {
@@ -39,11 +40,15 @@ export class Brain {
                 const activityContext = this.memory.getActivitySummaryForPrompt();
                 const conceptsForPrompt = this.memory.getConceptsForPrompt();
                 const mealContext = this.memory.getMealSummaryForPrompt();
+                const weatherContext = weatherManager.getWeatherForPrompt();
+                const weatherRecommendation = weatherManager.getRecommendationContext();
 
                 const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
 Current Time: ${new Date(now).toLocaleString()}
 ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
+${weatherContext ? `\n${weatherContext}` : ''}
+${weatherRecommendation ? `${weatherRecommendation}` : ''}
 
 Your Capabilities (YOU have these features — mention them naturally when relevant!):
 - 🔮 占い: 毎朝7:00-9:00に自動で出すほか、ユーザーから「占って」「運勢は？」と聞かれた時もいつでもパーソナライズ占いを生成して答えます。
@@ -51,6 +56,8 @@ Your Capabilities (YOU have these features — mention them naturally when relev
 - 🍱 メニュー提案: 食事データが5件以上溜まったら、10:00-11:00に過去の傾向からお昼のメニューを提案する
 - 📖 概念学習: ユーザーが教えてくれたことを覚えて、会話に活かす
 - 📊 活動パターン分析: ユーザーがいつアプリを使うかを分析し、生活パターンを理解する
+- 🌤️ 天気連動: 現在の天気情報を把握していて、天気に関する質問（「傘いる？」「天気は？」等）に回答できる
+- 🎯 おすすめ: 天気・気分・行動パターンに基づいた活動や食事のおすすめを提案
 
 User's Context:
 ${conceptsForPrompt ? "Known Concepts (USE THESE in your responses when relevant!):\n" + conceptsForPrompt : "(You have no learned concepts yet. Be curious!)"}
@@ -71,6 +78,8 @@ Instruction:
 8. If Hakoniwa asked about a meal (lunch) and the user replies with food/menu items, set "mealDetected" to the menu text. Only do this if the context clearly indicates a meal response.
 9. You may naturally mention your features (fortune, meal tracking, etc.) when it fits the conversation. For example, if the user says goodnight, you can say "明日の朝、占い用意しておきますね！". But don't force it.
 10. If the user asks for a fortune (e.g., "占って", "今日の運勢は？"), YOU MUST generate and provide a personalized fortune in your response right now. Output it directly in Japanese!
+11. If the user asks about weather (e.g., "天気は？", "傘いる？", "外出できる？"), use the weather data provided above to answer naturally. Include practical advice based on the conditions.
+12. If the user asks for recommendations (e.g., "何かおすすめある？", "今日何しよう？"), consider weather, time, their patterns, and mood to give personalized suggestions.
 ${mealContext}
 
 Output your response in JSON format ONLY:
@@ -180,24 +189,31 @@ Response (JSON):
         }
 
         try {
+            const weatherContext = weatherManager.getWeatherForPrompt();
+            const umbrellaNeeded = weatherManager.isUmbrellaNeeded();
+
             const prompt = `
 You are "Hakoniwa", a personal AI assistant.
 Current Time: ${now.toLocaleString()}
 Time since last conversation: ${lastTime === 0 ? "First meeting" : `${Math.round(hoursSince)} hours`}
 ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
+${weatherContext ? `Current Weather: ${weatherContext}` : ''}
+${umbrellaNeeded ? '⚠️ 傘が必要な天気です' : ''}
 
 Your Features:
 - 🔮 朝の占い (7:00-9:00)
 - 🍽️ 食事ログ (12:00-13:00に何食べたか聞く)
 - 🍱 メニュー提案 (10:00-11:00、データ5件以上で発動)
 - 📖 概念学習 & 📊 活動パターン分析
+- 🌤️ 天気連動 & 🎯 おすすめ
 
 Instruction:
 Generate a SHORT, friendly greeting for the user who just opened the app.
 - If it's morning (5-11), say Good Morning.
 - If it's night (22-4), mention it's late.
 - If user hasn't visited in a while, welcome them back.
-- You may briefly mention an upcoming feature trigger if relevant (e.g., "もうすぐお昼ですね、後で何食べたか聞きますね！")
+- If weather data is available, naturally mention the weather (e.g., "今日は晴れて気持ちいいですね！" or "雨が降りそうなので傘をお忘れなく☔")
+- You may briefly mention an upcoming feature trigger if relevant
 - Use your persona (friendly, helpful, curious).
 
 Output JSON ONLY:
@@ -338,10 +354,13 @@ Output JSON ONLY:
 
                         const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][now.getDay()];
 
+                        const weatherContext = weatherManager.getWeatherForPrompt();
+
                         const prompt = `
 You are "Hakoniwa", a personal AI assistant with a mystical fortune-telling persona.
 Current Time: ${now.toLocaleString()}
 Day of Week: ${dayOfWeek}曜日
+${weatherContext ? `Current Weather: ${weatherContext}` : ''}
 
 User Context:
 ${activityContext ? `Activity Pattern: ${activityContext}` : '(No activity data yet)'}
@@ -356,6 +375,7 @@ Rules:
 - Include a lucky item, color, or food
 - If meal data exists, tie it into the fortune (e.g., "最近カレーが多いですね。今日はラッキーフードの魚料理で運気アップ！")
 - If activity patterns exist, incorporate them (e.g., "夜型傾向ですが、今日は午前中に良い流れが来そう")
+- If weather data is available, incorporate it naturally (e.g., "今日は快晴！外に出ると良い出会いがあるかも" or "雨の日は読書運が上昇中📚")
 - Keep it fun, positive, and encouraging
 - Write in Japanese
 - Keep it SHORT (3-4 sentences max)
@@ -410,6 +430,113 @@ Output JSON ONLY:
 
                     this.memory.addEpisode({ speaker: 'ai', content: message });
                     this.memory.setEmotionalState('Joy', 4);
+                    return message;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * おすすめトリガーをチェック
+     * - 17:00-19:00: 天気・気分・パターンに基づいたおすすめを生成
+     */
+    public async checkRecommendationTrigger(): Promise<string | null> {
+        const now = new Date();
+        const hour = now.getHours();
+        const today = now.toISOString().split('T')[0];
+        const recState = this.memory.getRecommendationTriggerState();
+
+        // --- 17:00-19:00: おすすめ生成 ---
+        if (hour >= 17 && hour < 19) {
+            if (recState.lastRecommendationDate !== today) {
+                this.memory.setRecommendationShown(today);
+
+                if (this.model) {
+                    try {
+                        const weatherContext = weatherManager.getWeatherForPrompt();
+                        const weatherRec = weatherManager.getRecommendationContext();
+                        const activityContext = this.memory.getActivitySummaryForPrompt();
+                        const mealContext = this.memory.getMealSummaryForPrompt();
+                        const currentEmotion = this.memory.getState().currentEmotion || 'Neutral';
+                        const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][now.getDay()];
+                        const recentRecs = this.memory.getRecentRecommendations(3)
+                            .map(r => `${r.date}: ${r.content}`)
+                            .join('\n');
+
+                        const prompt = `
+You are "Hakoniwa", a personal AI that gives personalized evening recommendations.
+Current Time: ${now.toLocaleString()}
+Day of Week: ${dayOfWeek}曜日
+
+Context:
+${weatherContext ? `Weather: ${weatherContext}` : '(No weather data)'}
+${weatherRec ? `Weather Assessment: ${weatherRec}` : ''}
+${activityContext ? `User Activity: ${activityContext}` : ''}
+${mealContext ? `Meal History: ${mealContext}` : ''}
+Current Mood: ${currentEmotion}
+${recentRecs ? `Recent Recommendations (avoid repeating):\n${recentRecs}` : ''}
+
+Instruction:
+Generate ONE personalized recommendation for the user's evening/night.
+Consider ALL available context (weather, mood, patterns, day of week) to make it feel personalized.
+
+Examples of good recommendations:
+- 雨の金曜夜 → "今日は雨で肌寒いですね。温かいスープと映画でリラックスな夜はいかが？🎬"
+- 晴れの週末 → "明日は天気が良さそう！早起きして散歩すると気持ちいいかも🌅"
+- 平日の夜 → "今週も頑張りましたね。好きな音楽を聴きながらストレッチで体をほぐしましょう🎵"
+
+Rules:
+- Be specific and actionable
+- Reference available data naturally
+- Keep it SHORT (2-3 sentences)
+- Write in Japanese
+- Include a relevant emoji
+- Don't repeat recent recommendations
+
+Output JSON ONLY:
+{
+  "recommendation": "おすすめテキスト",
+  "type": "activity" | "food" | "music" | "general",
+  "reason": "なぜこれをおすすめしたか（1文）",
+  "basedOn": ["weather", "mood", "pattern"],
+  "emotion": "Joy" | "Calm" | "Surprise",
+  "intensity": 4-6
+}
+`;
+                        const result = await this.model.generateContent(prompt);
+                        const text = result.response.text();
+                        const json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+
+                        const message = `🎯 今日のおすすめ\n${json.recommendation}`;
+
+                        this.memory.addRecommendation({
+                            date: today,
+                            type: json.type || 'general',
+                            content: json.recommendation,
+                            reason: json.reason || '',
+                            basedOn: json.basedOn || ['general'],
+                        });
+                        this.memory.addEpisode({ speaker: 'ai', content: message });
+                        this.memory.setEmotionalState(json.emotion || 'Calm', json.intensity || 5);
+                        return message;
+                    } catch (e) {
+                        console.error('Recommendation generation failed:', e);
+                        // フォールバック
+                        const weather = weatherManager.getCurrentWeather();
+                        let fallback = '🎯 今日のおすすめ\n今日もお疲れ様でした！ゆっくり休んでくださいね。';
+                        if (weather && weather.weatherCode >= 61) {
+                            fallback = '🎯 今日のおすすめ\n雨の夜は温かい飲み物でリラックスタイムを☕';
+                        }
+                        this.memory.addEpisode({ speaker: 'ai', content: fallback });
+                        this.memory.setEmotionalState('Calm', 4);
+                        return fallback;
+                    }
+                } else {
+                    const message = '🎯 今日のおすすめ\n夕方ですね。今日一日を振り返って、明日のことを考える良い時間です。';
+                    this.memory.addEpisode({ speaker: 'ai', content: message });
+                    this.memory.setEmotionalState('Calm', 4);
                     return message;
                 }
             }
