@@ -154,16 +154,16 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
     );
 };
 
-// Mini Sphere for input area with fluid animation
+// Mini Sphere for input area with fluid animation (synced with main sphere)
 const MiniSphere: React.FC<{ emotion?: string; intensity?: number }> = ({ emotion = 'Neutral', intensity = 5 }) => {
     const getColors = () => {
         switch (emotion?.toLowerCase()) {
-            case 'joy': return { from: '#fb923c', to: '#fde047', accent: '#fbbf24' };
-            case 'anger': return { from: '#dc2626', to: '#ea580c', accent: '#f97316' };
-            case 'sadness': return { from: '#1d4ed8', to: '#312e81', accent: '#4f46e5' };
-            case 'calm': return { from: '#6ee7b7', to: '#22d3ee', accent: '#14b8a6' };
-            case 'surprise': return { from: '#f472b6', to: '#a855f7', accent: '#d946ef' };
-            default: return { from: '#94a3b8', to: '#64748b', accent: '#cbd5e1' };
+            case 'joy': return { from: '#fb923c', to: '#fde047', accent: '#fbbf24', particle: '#fff7ed' };
+            case 'anger': return { from: '#dc2626', to: '#ea580c', accent: '#f97316', particle: '#fef2f2' };
+            case 'sadness': return { from: '#1d4ed8', to: '#312e81', accent: '#4f46e5', particle: '#e0e7ff' };
+            case 'calm': return { from: '#6ee7b7', to: '#22d3ee', accent: '#14b8a6', particle: '#ecfdf5' };
+            case 'surprise': return { from: '#f472b6', to: '#a855f7', accent: '#d946ef', particle: '#fdf4ff' };
+            default: return { from: '#94a3b8', to: '#64748b', accent: '#cbd5e1', particle: '#f1f5f9' };
         }
     };
 
@@ -171,13 +171,14 @@ const MiniSphere: React.FC<{ emotion?: string; intensity?: number }> = ({ emotio
     const blobSpeed1 = Math.max(2, 10 - (intensity || 5) * 0.8);
     const blobSpeed2 = Math.max(2.5, 12 - (intensity || 5) * 1);
     const pulseDuration = Math.max(0.5, 4 - ((intensity || 5) * 0.35));
+    const spinSpeed = Math.max(2, 8 - (intensity || 5) * 0.5);
 
     return (
         <>
             <style>{`
                 @keyframes miniPulse {
-                    0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(251, 146, 60, 0.4); }
-                    50% { transform: scale(1.08); box-shadow: 0 0 18px rgba(251, 146, 60, 0.6); }
+                    0%, 100% { transform: scale(1); box-shadow: 0 0 12px ${colors.from}66; }
+                    50% { transform: scale(1.08); box-shadow: 0 0 20px ${colors.from}99; }
                 }
                 @keyframes miniBlob1 {
                     0%, 100% { transform: translate(0, 0) rotate(0deg); }
@@ -187,6 +188,29 @@ const MiniSphere: React.FC<{ emotion?: string; intensity?: number }> = ({ emotio
                 @keyframes miniBlob2 {
                     0%, 100% { transform: translate(0, 0) scale(1); }
                     50% { transform: translate(-15%, -10%) scale(1.2); }
+                }
+                @keyframes miniSpin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                @keyframes miniWave {
+                    0%, 100% { transform: scale(1); opacity: 0.3; }
+                    50% { transform: scale(1.3); opacity: 0.1; }
+                }
+                @keyframes miniParticle1 {
+                    0%, 100% { transform: translate(-6px, -8px); opacity: 0; }
+                    20%, 80% { opacity: 1; }
+                    50% { transform: translate(8px, 4px); opacity: 0.8; }
+                }
+                @keyframes miniParticle2 {
+                    0%, 100% { transform: translate(10px, -4px); opacity: 0; }
+                    15%, 85% { opacity: 1; }
+                    50% { transform: translate(-8px, 10px); opacity: 0.7; }
+                }
+                @keyframes miniParticle3 {
+                    0%, 100% { transform: translate(-4px, 10px); opacity: 0; }
+                    25%, 75% { opacity: 1; }
+                    50% { transform: translate(6px, -10px); opacity: 0.9; }
                 }
             `}</style>
             <div
@@ -228,6 +252,41 @@ const MiniSphere: React.FC<{ emotion?: string; intensity?: number }> = ({ emotio
                     animation: `miniBlob2 ${blobSpeed2}s infinite ease-in-out`,
                     borderRadius: '50% 50% 40% 60%'
                 }} />
+
+                {/* Mini plasma swirl */}
+                <div style={{
+                    position: 'absolute',
+                    inset: '10%',
+                    borderRadius: '9999px',
+                    background: `conic-gradient(from 0deg, transparent, ${colors.accent}40, transparent, ${colors.from}30, transparent)`,
+                    animation: `miniSpin ${spinSpeed}s linear infinite`,
+                    mixBlendMode: 'screen',
+                }} />
+
+                {/* Mini energy wave */}
+                <div style={{
+                    position: 'absolute',
+                    inset: '20%',
+                    borderRadius: '9999px',
+                    border: `1px solid ${colors.particle}40`,
+                    animation: `miniWave ${blobSpeed2 * 0.5}s ease-in-out infinite`,
+                }} />
+
+                {/* Mini particles */}
+                {[0, 1, 2].map(i => (
+                    <div key={i} style={{
+                        position: 'absolute',
+                        width: '2px',
+                        height: '2px',
+                        borderRadius: '9999px',
+                        background: colors.particle,
+                        boxShadow: `0 0 4px ${colors.accent}`,
+                        left: '50%',
+                        top: '50%',
+                        animation: `miniParticle${i + 1} ${blobSpeed1 * 0.8}s ${i * 0.8}s ease-in-out infinite`,
+                        mixBlendMode: 'screen',
+                    }} />
+                ))}
 
                 {/* Highlight */}
                 <div style={{
