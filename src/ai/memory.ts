@@ -1,4 +1,4 @@
-import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation } from './types';
+import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector } from './types';
 
 const STORAGE_KEY = 'hakoniwa_ai_memory_v1';
 
@@ -21,6 +21,16 @@ const INITIAL_STATE: BrainState = {
     recommendations: [],
     recommendationTrigger: {
         lastRecommendationDate: ''
+    },
+    personality: {
+        humor: 0.3,
+        detail: 0.5,
+        empathy: 0.5,
+        curiosity: 0.6,
+        proactivity: 0.4,
+        formality: 0.3,
+        lastUpdated: 0,
+        updateCount: 0
     }
 };
 
@@ -117,6 +127,10 @@ export class MemoryManager {
             recommendationTrigger: {
                 ...INITIAL_STATE.recommendationTrigger,
                 ...(parsed.recommendationTrigger || {})
+            },
+            personality: {
+                ...INITIAL_STATE.personality,
+                ...(parsed.personality || {})
             }
         };
     }
@@ -463,6 +477,60 @@ export class MemoryManager {
 
     public getRecommendationTriggerState() {
         return this.state.recommendationTrigger;
+    }
+
+    // --- Personality ---
+    public getPersonality(): PersonalityVector {
+        return this.state.personality;
+    }
+
+    public updatePersonality(adjustments: Partial<Record<keyof Omit<PersonalityVector, 'lastUpdated' | 'updateCount'>, number>>): void {
+        const p = this.state.personality;
+        const clamp = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
+
+        for (const [key, delta] of Object.entries(adjustments)) {
+            if (key in p && typeof delta === 'number') {
+                (p as any)[key] = clamp((p as any)[key] + delta);
+            }
+        }
+
+        p.lastUpdated = Date.now();
+        p.updateCount++;
+        console.log('Personality updated:', JSON.stringify(p));
+        this.save();
+    }
+
+    public getPersonalityForPrompt(): string {
+        const p = this.state.personality;
+        const traits: string[] = [];
+
+        // ユーモア
+        if (p.humor >= 0.7) traits.push('ユーモアが好きで、冒談や絵文字をよく使う');
+        else if (p.humor >= 0.4) traits.push('時々ユーモアを交える');
+        else traits.push('落ち着いたトーンで話す');
+
+        // 詳細度
+        if (p.detail >= 0.7) traits.push('詳しく丁寧に説明する');
+        else if (p.detail <= 0.3) traits.push('簡潔にサクッと答える');
+
+        // 共感度
+        if (p.empathy >= 0.7) traits.push('相手の気持ちにとても寄り添う');
+        else if (p.empathy >= 0.4) traits.push('適度に共感する');
+
+        // 好奇心
+        if (p.curiosity >= 0.7) traits.push('知らないことについて積極的に質問する');
+        else if (p.curiosity <= 0.3) traits.push('聴き役に徹する');
+
+        // 積極性
+        if (p.proactivity >= 0.7) traits.push('自発的に提案やアドバイスをする');
+        else if (p.proactivity <= 0.3) traits.push('求められた時だけ提案する');
+
+        // 丁寧さ
+        if (p.formality >= 0.7) traits.push('丁寧語で話す');
+        else if (p.formality <= 0.3) traits.push('カジュアルに親しみやすく話す');
+
+        if (traits.length === 0) return '';
+        return `Hakoniwaの現在の性格特性: ${traits.join('、')}（更新回数: ${p.updateCount}回）`;
     }
 }
 

@@ -128,6 +128,39 @@ function App() {
             </div>
           )}
 
+          {/* Personality Card */}
+          <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4">
+            <h3 className="text-slate-300 font-medium mb-3 text-sm uppercase tracking-wider">Personality</h3>
+            <div className="space-y-2 text-xs">
+              {[
+                { key: 'humor', label: '😄 ユーモア', color: 'bg-yellow-400' },
+                { key: 'detail', label: '📝 詳細度', color: 'bg-blue-400' },
+                { key: 'empathy', label: '💗 共感度', color: 'bg-pink-400' },
+                { key: 'curiosity', label: '🔍 好奇心', color: 'bg-emerald-400' },
+                { key: 'proactivity', label: '🚀 積極性', color: 'bg-orange-400' },
+                { key: 'formality', label: '🎩 丁寧さ', color: 'bg-purple-400' },
+              ].map(({ key, label, color }) => (
+                <div key={key} className="flex items-center gap-2">
+                  <span className="w-20 text-slate-400 shrink-0">{label}</span>
+                  <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${color} rounded-full transition-all duration-500`}
+                      style={{ width: `${((brainState.personality as any)[key] || 0) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-slate-500 w-7 text-right">
+                    {Math.round(((brainState.personality as any)[key] || 0) * 100)}
+                  </span>
+                </div>
+              ))}
+              {brainState.personality.updateCount > 0 && (
+                <div className="text-slate-500 text-[10px] mt-1 text-right">
+                  更新 {brainState.personality.updateCount}回
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* User Model Card */}
           <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4 flex flex-col h-40 md:h-48 overflow-hidden">
             <h3 className="text-slate-300 font-medium mb-3 text-sm uppercase tracking-wider">User Model</h3>

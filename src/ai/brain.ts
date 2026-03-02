@@ -7,6 +7,7 @@ export class Brain {
     private memory: MemoryManager;
     private genAI: GoogleGenerativeAI | null = null;
     private model: GenerativeModel | null = null;
+    private conversationCount: number = 0;
 
     constructor(memory: MemoryManager) {
         this.memory = memory;
@@ -42,6 +43,8 @@ export class Brain {
                 const mealContext = this.memory.getMealSummaryForPrompt();
                 const weatherContext = weatherManager.getWeatherForPrompt();
                 const weatherRecommendation = weatherManager.getRecommendationContext();
+                const personalityContext = this.memory.getPersonalityForPrompt();
+                const shouldEvaluatePersonality = (++this.conversationCount % 5 === 0);
 
                 const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
@@ -58,6 +61,9 @@ Your Capabilities (YOU have these features — mention them naturally when relev
 - 📊 活動パターン分析: ユーザーがいつアプリを使うかを分析し、生活パターンを理解する
 - 🌤️ 天気連動: 現在の天気情報を把握していて、天気に関する質問（「傘いる？」「天気は？」等）に回答できる
 - 🎯 おすすめ: 天気・気分・行動パターンに基づいた活動や食事のおすすめを提案
+
+${personalityContext ? `YOUR PERSONALITY (follow these traits in your response!):
+${personalityContext}` : ''}
 
 User's Context:
 ${conceptsForPrompt ? "Known Concepts (USE THESE in your responses when relevant!):\n" + conceptsForPrompt : "(You have no learned concepts yet. Be curious!)"}
@@ -88,8 +94,16 @@ Output your response in JSON format ONLY:
   "emotion": "Calm" | "Joy" | "Sadness" | "Anger" | "Surprise" | "Neutral",
   "intensity": 0-10,
   "learnedConcepts": [{"term": "概念名", "definition": "詳細な説明（特徴、用途、関連情報を含む）"}],
-  "mealDetected": null | "メニュー名"
+  "mealDetected": null | "メニュー名"${shouldEvaluatePersonality ? `,
+  "personalityAdjust": { "humor": 0.0, "detail": 0.0, "empathy": 0.0, "curiosity": 0.0, "proactivity": 0.0, "formality": 0.0 }` : ''}
 }
+${shouldEvaluatePersonality ? `
+IMPORTANT - personalityAdjust:
+- Based on THIS conversation, adjust Hakoniwa's personality slightly (-0.05 to +0.05 per trait)
+- If user seems to enjoy humor, increase humor. If user says "short please", decrease detail.
+- If user is sharing feelings, increase empathy. If user asks questions, increase curiosity.
+- Only adjust traits that are clearly relevant. Use 0.0 for unchanged traits.
+- These small adjustments accumulate over time to shape Hakoniwa's personality.` : ''}
 
 IMPORTANT for learnedConcepts:
 - Only include if user EXPLICITLY taught something new
@@ -125,6 +139,11 @@ Response (JSON):
                         this.memory.addMealLog(json.mealDetected);
                         this.memory.clearAwaitingMealResponse();
                         console.log(`Meal logged: ${json.mealDetected}`);
+                    }
+
+                    // Apply personality adjustments (every 5 conversations)
+                    if (json.personalityAdjust && shouldEvaluatePersonality) {
+                        this.memory.updatePersonality(json.personalityAdjust);
                     }
 
                 } catch (e) {

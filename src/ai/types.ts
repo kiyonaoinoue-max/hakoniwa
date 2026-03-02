@@ -68,6 +68,17 @@ export interface RecommendationTriggerState {
   lastRecommendationDate: string; // 最後におすすめを出した日付 (YYYY-MM-DD)
 }
 
+export interface PersonalityVector {
+  humor: number;        // 0.0-1.0 ユーモア度
+  detail: number;       // 0.0-1.0 詳細度
+  empathy: number;      // 0.0-1.0 共感度
+  curiosity: number;    // 0.0-1.0 好奇心
+  proactivity: number;  // 0.0-1.0 積極性
+  formality: number;    // 0.0-1.0 丁寧さ
+  lastUpdated: number;  // timestamp
+  updateCount: number;  // 総更新回数
+}
+
 export interface BrainState {
   episodes: EpisodicMemory[];
   semantics: Record<string, Semantics>;
@@ -80,6 +91,7 @@ export interface BrainState {
   fortuneTrigger: FortuneTriggerState;
   recommendations: Recommendation[];
   recommendationTrigger: RecommendationTriggerState;
+  personality: PersonalityVector;
   currentEmotion?: string;
   currentIntensity?: number;
 }
