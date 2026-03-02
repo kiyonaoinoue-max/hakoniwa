@@ -94,7 +94,7 @@ function App() {
       <div className="flex flex-col md:flex-row gap-6 w-full min-h-screen max-w-6xl mx-auto p-4" style={{ position: 'relative', zIndex: 1 }}>
 
         {/* Visual Core & Sidebar (Responsive: Top on mobile, Left on desktop) */}
-        <div className="flex flex-col gap-4 w-full md:w-64 md:flex-shrink-0 items-center justify-start pt-4 md:pt-10">
+        <div className="flex flex-col gap-4 w-full md:w-64 md:flex-shrink-0 items-center justify-start pt-4 md:pt-6 md:sticky md:top-0 md:max-h-screen md:overflow-y-auto md:pb-6" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
           <HakoniwaSphere
             emotion={brainState.currentEmotion}
             intensity={brainState.currentIntensity}
@@ -107,8 +107,8 @@ function App() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-slate-300 font-medium text-sm uppercase tracking-wider">Mode</h3>
               <span className={`text-xs px-2 py-0.5 rounded-full ${brainState.modeState.currentMode === 'seed'
-                  ? 'bg-green-500/20 text-green-300 border border-green-500/30'
-                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                 }`}>
                 {brainState.modeState.currentMode === 'seed' ? '🌱 日常' : '🌾 共創'}
               </span>
@@ -122,9 +122,9 @@ function App() {
                 <div className="h-2 bg-white/10 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all duration-700 ${brainState.modeState.trustScore >= 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-300' :
-                        brainState.modeState.trustScore >= 50 ? 'bg-gradient-to-r from-blue-400 to-blue-300' :
-                          brainState.modeState.trustScore >= 30 ? 'bg-gradient-to-r from-yellow-400 to-yellow-300' :
-                            'bg-gradient-to-r from-red-400 to-red-300'
+                      brainState.modeState.trustScore >= 50 ? 'bg-gradient-to-r from-blue-400 to-blue-300' :
+                        brainState.modeState.trustScore >= 30 ? 'bg-gradient-to-r from-yellow-400 to-yellow-300' :
+                          'bg-gradient-to-r from-red-400 to-red-300'
                       }`}
                     style={{ width: `${brainState.modeState.trustScore}%` }}
                   />
