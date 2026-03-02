@@ -56,53 +56,29 @@ export const HakoniwaSphere: React.FC<Props> = ({ emotion = 'Neutral', intensity
                 }}
             />
 
-            {/* Orbiting Ring 1 */}
+            {/* Orbiting Dot 1 */}
             <div style={{
                 position: 'absolute',
-                width: '160px',
-                height: '160px',
+                width: '6px',
+                height: '6px',
                 borderRadius: '9999px',
-                border: `1px solid ${colors.accent}40`,
-                animation: `hk-orbit ${orbitSpeed}s linear infinite`,
-                transformStyle: 'preserve-3d',
-                transform: 'rotateX(60deg)',
-            }}>
-                <div style={{
-                    position: 'absolute',
-                    top: '-3px',
-                    left: '50%',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '9999px',
-                    background: colors.accent,
-                    boxShadow: `0 0 8px ${colors.accent}`,
-                    transform: 'translateX(-50%)',
-                }} />
-            </div>
+                background: colors.accent,
+                boxShadow: `0 0 10px ${colors.accent}, 0 0 20px ${colors.accent}60`,
+                animation: `hk-orbitDot1 ${orbitSpeed}s linear infinite`,
+                zIndex: 1,
+            }} />
 
-            {/* Orbiting Ring 2 */}
+            {/* Orbiting Dot 2 */}
             <div style={{
                 position: 'absolute',
-                width: '150px',
-                height: '150px',
+                width: '4px',
+                height: '4px',
                 borderRadius: '9999px',
-                border: `1px solid ${colors.from}30`,
-                animation: `hk-orbit ${orbitSpeed * 1.3}s linear infinite reverse`,
-                transformStyle: 'preserve-3d',
-                transform: 'rotateX(75deg) rotateY(30deg)',
-            }}>
-                <div style={{
-                    position: 'absolute',
-                    top: '-2px',
-                    left: '50%',
-                    width: '4px',
-                    height: '4px',
-                    borderRadius: '9999px',
-                    background: colors.from,
-                    boxShadow: `0 0 6px ${colors.from}`,
-                    transform: 'translateX(-50%)',
-                }} />
-            </div>
+                background: colors.from,
+                boxShadow: `0 0 8px ${colors.from}, 0 0 16px ${colors.from}60`,
+                animation: `hk-orbitDot2 ${orbitSpeed * 1.3}s linear infinite`,
+                zIndex: 1,
+            }} />
 
             {/* Core Sphere Container */}
             <div
@@ -245,9 +221,19 @@ export const HakoniwaSphere: React.FC<Props> = ({ emotion = 'Neutral', intensity
                     0%, 100% { transform: scale(1); opacity: 0.4; }
                     50% { transform: scale(1.15); opacity: 0.6; }
                 }
-                @keyframes hk-orbit {
-                    from { transform: rotateX(60deg) rotateZ(0deg); }
-                    to { transform: rotateX(60deg) rotateZ(360deg); }
+                @keyframes hk-orbitDot1 {
+                    0% { transform: translate(80px, 0) scale(1); opacity: 0.9; }
+                    25% { transform: translate(0, 50px) scale(0.8); opacity: 0.6; }
+                    50% { transform: translate(-80px, 0) scale(1); opacity: 0.9; }
+                    75% { transform: translate(0, -50px) scale(0.8); opacity: 0.6; }
+                    100% { transform: translate(80px, 0) scale(1); opacity: 0.9; }
+                }
+                @keyframes hk-orbitDot2 {
+                    0% { transform: translate(0, -70px) scale(1); opacity: 0.8; }
+                    25% { transform: translate(60px, 0) scale(0.7); opacity: 0.5; }
+                    50% { transform: translate(0, 70px) scale(1); opacity: 0.8; }
+                    75% { transform: translate(-60px, 0) scale(0.7); opacity: 0.5; }
+                    100% { transform: translate(0, -70px) scale(1); opacity: 0.8; }
                 }
                 @keyframes hk-spin {
                     from { transform: rotate(0deg); }
