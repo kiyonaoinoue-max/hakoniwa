@@ -44,7 +44,9 @@ export class Brain {
                 const weatherContext = weatherManager.getWeatherForPrompt();
                 const weatherRecommendation = weatherManager.getRecommendationContext();
                 const personalityContext = this.memory.getPersonalityForPrompt();
+                const modeContext = this.memory.getModeContextForPrompt();
                 const shouldEvaluatePersonality = (++this.conversationCount % 5 === 0);
+                this.memory.incrementModeCount();
 
                 const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
@@ -64,6 +66,8 @@ Your Capabilities (YOU have these features — mention them naturally when relev
 
 ${personalityContext ? `YOUR PERSONALITY (follow these traits in your response!):
 ${personalityContext}` : ''}
+
+${modeContext}
 
 User's Context:
 ${conceptsForPrompt ? "Known Concepts (USE THESE in your responses when relevant!):\n" + conceptsForPrompt : "(You have no learned concepts yet. Be curious!)"}
@@ -86,6 +90,9 @@ Instruction:
 10. If the user asks for a fortune (e.g., "占って", "今日の運勢は？"), YOU MUST generate and provide a personalized fortune in your response right now. Output it directly in Japanese!
 11. If the user asks about weather (e.g., "天気は？", "傘いる？", "外出できる？"), use the weather data provided above to answer naturally. Include practical advice based on the conditions.
 12. If the user asks for recommendations (e.g., "何かおすすめある？", "今日何しよう？"), consider weather, time, their patterns, and mood to give personalized suggestions.
+13. Detect if the conversation is "creative/work" (e.g., アイデア, 仕事, 創作, 相談, レビュー, フィードバック) or "daily" (e.g., 雑談, 挨拶, 感情共有, 日常報告). Set modeSwitch accordingly.
+14. If the user seems tired or stressed, you may SUGGEST switching to seed mode: "疲れてるみたいだから、リラックスモードにしませんか？" (This builds trust!)
+15. Set trustDelta based on: +1～3 for empathetic/helpful interaction, -1～3 for off-target response or user frustration.
 ${mealContext}
 
 Output your response in JSON format ONLY:
@@ -94,9 +101,14 @@ Output your response in JSON format ONLY:
   "emotion": "Calm" | "Joy" | "Sadness" | "Anger" | "Surprise" | "Neutral",
   "intensity": 0-10,
   "learnedConcepts": [{"term": "概念名", "definition": "詳細な説明（特徴、用途、関連情報を含む）"}],
-  "mealDetected": null | "メニュー名"${shouldEvaluatePersonality ? `,
+  "mealDetected": null | "メニュー名",
+  "modeSwitch": null | "seed" | "harvest",
+  "trustDelta": 0${shouldEvaluatePersonality ? `,
   "personalityAdjust": { "humor": 0.0, "detail": 0.0, "empathy": 0.0, "curiosity": 0.0, "proactivity": 0.0, "formality": 0.0 }` : ''}
 }
+IMPORTANT - modeSwitch & trustDelta:
+- modeSwitch: Set to "harvest" if user brings up creative/work topics. Set to "seed" if user is just chatting. null if no change needed.
+- trustDelta: How much this interaction affected trust. Positive for good empathetic interactions (+1 to +3), negative for frustrating ones (-1 to -3). Usually +1 for normal good conversation.
 ${shouldEvaluatePersonality ? `
 IMPORTANT - personalityAdjust:
 - Based on THIS conversation, adjust Hakoniwa's personality slightly (-0.05 to +0.05 per trait)
@@ -144,6 +156,16 @@ Response (JSON):
                     // Apply personality adjustments (every 5 conversations)
                     if (json.personalityAdjust && shouldEvaluatePersonality) {
                         this.memory.updatePersonality(json.personalityAdjust);
+                    }
+
+                    // Apply mode switch
+                    if (json.modeSwitch === 'seed' || json.modeSwitch === 'harvest') {
+                        this.memory.setMode(json.modeSwitch);
+                    }
+
+                    // Apply trust delta
+                    if (typeof json.trustDelta === 'number' && json.trustDelta !== 0) {
+                        this.memory.adjustTrust(json.trustDelta);
                     }
 
                 } catch (e) {

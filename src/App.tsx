@@ -102,6 +102,41 @@ function App() {
 
           <div className="md:hidden text-xs text-slate-500 mb-2">Hakoniwa Core</div>
 
+          {/* Mode & Trust Card */}
+          <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-slate-300 font-medium text-sm uppercase tracking-wider">Mode</h3>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${brainState.modeState.currentMode === 'seed'
+                  ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                }`}>
+                {brainState.modeState.currentMode === 'seed' ? '🌱 日常' : '🌾 共創'}
+              </span>
+            </div>
+            <div className="space-y-2">
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-slate-400">💰 信頼残高</span>
+                  <span className="text-slate-300 font-medium">{brainState.modeState.trustScore}/100</span>
+                </div>
+                <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ${brainState.modeState.trustScore >= 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-300' :
+                        brainState.modeState.trustScore >= 50 ? 'bg-gradient-to-r from-blue-400 to-blue-300' :
+                          brainState.modeState.trustScore >= 30 ? 'bg-gradient-to-r from-yellow-400 to-yellow-300' :
+                            'bg-gradient-to-r from-red-400 to-red-300'
+                      }`}
+                    style={{ width: `${brainState.modeState.trustScore}%` }}
+                  />
+                </div>
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>日常 {brainState.modeState.totalSeedCount}回</span>
+                <span>共創 {brainState.modeState.totalHarvestCount}回</span>
+              </div>
+            </div>
+          </div>
+
           {/* Weather Card */}
           {weather && (
             <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4">

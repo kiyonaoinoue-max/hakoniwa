@@ -1,4 +1,4 @@
-import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector } from './types';
+import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector, InteractionMode } from './types';
 
 const STORAGE_KEY = 'hakoniwa_ai_memory_v1';
 
@@ -31,6 +31,12 @@ const INITIAL_STATE: BrainState = {
         formality: 0.3,
         lastUpdated: 0,
         updateCount: 0
+    },
+    modeState: {
+        currentMode: 'seed',
+        trustScore: 30,
+        totalSeedCount: 0,
+        totalHarvestCount: 0
     }
 };
 
@@ -131,6 +137,10 @@ export class MemoryManager {
             personality: {
                 ...INITIAL_STATE.personality,
                 ...(parsed.personality || {})
+            },
+            modeState: {
+                ...INITIAL_STATE.modeState,
+                ...(parsed.modeState || {})
             }
         };
     }
@@ -531,6 +541,73 @@ export class MemoryManager {
 
         if (traits.length === 0) return '';
         return `Hakoniwaの現在の性格特性: ${traits.join('、')}（更新回数: ${p.updateCount}回）`;
+    }
+
+    // --- Mode & Trust ---
+    public getCurrentMode(): InteractionMode {
+        return this.state.modeState.currentMode;
+    }
+
+    public getTrustScore(): number {
+        return this.state.modeState.trustScore;
+    }
+
+    public setMode(mode: InteractionMode): void {
+        if (this.state.modeState.currentMode !== mode) {
+            this.state.modeState.currentMode = mode;
+            console.log(`Mode switched to: ${mode}`);
+            this.save();
+        }
+    }
+
+    public incrementModeCount(): void {
+        if (this.state.modeState.currentMode === 'seed') {
+            this.state.modeState.totalSeedCount++;
+        } else {
+            this.state.modeState.totalHarvestCount++;
+        }
+    }
+
+    public adjustTrust(delta: number): void {
+        const prev = this.state.modeState.trustScore;
+        this.state.modeState.trustScore = Math.round(
+            Math.max(0, Math.min(100, prev + delta))
+        );
+        if (prev !== this.state.modeState.trustScore) {
+            console.log(`Trust: ${prev} → ${this.state.modeState.trustScore} (${delta > 0 ? '+' : ''}${delta})`);
+            this.save();
+        }
+    }
+
+    public canGiveHarshFeedback(): boolean {
+        return this.state.modeState.trustScore >= 50;
+    }
+
+    public getModeContextForPrompt(): string {
+        const ms = this.state.modeState;
+        const trust = ms.trustScore;
+
+        let modeInstructions = '';
+
+        if (ms.currentMode === 'seed') {
+            modeInstructions = `🌱 CURRENT MODE: 日常モード (Seed)
+- 感情に寄り添い、安心感を与える
+- 直近の話題や気分を優先する
+- 聞き役中心、適度に相槌
+- 一貫性のある「いつものハコさん」でいる
+- この会話でユーザーの価値観や好みを理解する（種まき）`;
+        } else {
+            modeInstructions = `🌾 CURRENT MODE: 共創モード (Harvest)
+- 具体的な構成案や代替案をどんどん提案する
+- 過去の会話や蓄積した知識を積極的に活用する
+- ユーザーの想定外の視点もぶつける
+${trust >= 50 ? '- 信頼残高が十分なので、必要なら厳しいフィードバックもOK（「それはちょっと弱いかも」等）' : '- 信頼残高がまだ足りないので、厳しいフィードバックは控えめに'}
+- 蓄積した「種」（日常会話で学んだ価値観や好み）を活かして核心を突く`;
+        }
+
+        return `${modeInstructions}
+信頼残高: ${trust}/100 (${trust >= 70 ? '厚い信頼' : trust >= 50 ? '信頼あり' : trust >= 30 ? '関係構築中' : 'まだ浅い関係'})
+累計: 日常${ms.totalSeedCount}回 / 共創${ms.totalHarvestCount}回`;
     }
 }
 

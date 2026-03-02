@@ -79,6 +79,15 @@ export interface PersonalityVector {
   updateCount: number;  // 総更新回数
 }
 
+export type InteractionMode = 'seed' | 'harvest'; // 日常 | 共創
+
+export interface ModeState {
+  currentMode: InteractionMode;
+  trustScore: number;        // 0-100
+  totalSeedCount: number;    // 日常モードの累計会話数
+  totalHarvestCount: number; // 共創モードの累計会話数
+}
+
 export interface BrainState {
   episodes: EpisodicMemory[];
   semantics: Record<string, Semantics>;
@@ -92,6 +101,7 @@ export interface BrainState {
   recommendations: Recommendation[];
   recommendationTrigger: RecommendationTriggerState;
   personality: PersonalityVector;
+  modeState: ModeState;
   currentEmotion?: string;
   currentIntensity?: number;
 }
