@@ -8,6 +8,8 @@ export class Brain {
     private genAI: GoogleGenerativeAI | null = null;
     private model: GenerativeModel | null = null;
     private conversationCount: number = 0;
+    private static API_LIMIT = 250;
+    private static API_STORAGE_KEY = 'hakoniwa_api_usage';
 
     constructor(memory: MemoryManager) {
         this.memory = memory;
@@ -18,6 +20,35 @@ export class Brain {
         } else {
             console.warn("Gemini API Key is missing or invalid.");
         }
+    }
+
+    // --- API Usage Tracker ---
+    private getPacificDate(): string {
+        // Get current date in Pacific Time for daily reset
+        return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    }
+
+    private getApiCount(): number {
+        try {
+            const data = JSON.parse(localStorage.getItem(Brain.API_STORAGE_KEY) || '{}');
+            const today = this.getPacificDate();
+            if (data.date !== today) return 0; // New day, reset
+            return data.count || 0;
+        } catch { return 0; }
+    }
+
+    private incrementApiCount(): void {
+        const today = this.getPacificDate();
+        const count = this.getApiCount() + 1;
+        localStorage.setItem(Brain.API_STORAGE_KEY, JSON.stringify({ date: today, count }));
+    }
+
+    public getApiUsage(): { used: number; max: number; remaining: number; percent: number } {
+        const used = this.getApiCount();
+        const max = Brain.API_LIMIT;
+        const remaining = Math.max(0, max - used);
+        const percent = Math.round((remaining / max) * 100);
+        return { used, max, remaining, percent };
     }
 
     public async processInput(input: string): Promise<string> {
@@ -130,6 +161,7 @@ IMPORTANT for learnedConcepts:
 Response (JSON):
 `;
                 const result = await this.model.generateContent(prompt);
+                this.incrementApiCount();
                 const text = result.response.text();
 
                 // Parse JSON
@@ -314,6 +346,7 @@ Output JSON ONLY:
 }
 `;
             const result = await this.model.generateContent(prompt);
+            this.incrementApiCount();
             const text = result.response.text();
             const json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
 
@@ -387,6 +420,7 @@ Output JSON ONLY:
 }
 `;
                         const result = await this.model.generateContent(prompt);
+                        this.incrementApiCount();
                         const text = result.response.text();
                         const json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
 
@@ -480,6 +514,7 @@ Output JSON ONLY:
 }
 `;
                         const result = await this.model.generateContent(prompt);
+                        this.incrementApiCount();
                         const text = result.response.text();
                         const json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
 
@@ -596,6 +631,7 @@ Output JSON ONLY:
 }
 `;
                         const result = await this.model.generateContent(prompt);
+                        this.incrementApiCount();
                         const text = result.response.text();
                         const json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
 

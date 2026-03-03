@@ -155,6 +155,36 @@ function App() {
             </div>
           </div>
 
+          {/* HP (API Usage) Card */}
+          {(() => {
+            const api = brain.getApiUsage();
+            const hpColor = api.percent >= 60 ? 'from-emerald-400 to-emerald-300'
+              : api.percent >= 30 ? 'from-yellow-400 to-yellow-300'
+                : 'from-red-400 to-red-300';
+            const hpTextColor = api.percent >= 60 ? 'text-emerald-300'
+              : api.percent >= 30 ? 'text-yellow-300'
+                : 'text-red-300';
+            const hpLabel = api.percent >= 80 ? '元気！' : api.percent >= 60 ? '好調' : api.percent >= 30 ? 'ちょっと疲れてきた' : api.percent >= 10 ? '休憩が必要...' : '限界...';
+            return (
+              <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-slate-300 font-medium text-sm uppercase tracking-wider">HP</h3>
+                  <span className={`text-xs font-bold ${hpTextColor}`}>{api.remaining}/{api.max}</span>
+                </div>
+                <div className="h-3 bg-white/10 rounded-full overflow-hidden mb-2">
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 bg-gradient-to-r ${hpColor}`}
+                    style={{ width: `${api.percent}%` }}
+                  />
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className={`text-[11px] ${hpTextColor}`}>❤️ {hpLabel}</span>
+                  <span className="text-[10px] text-slate-500">本日 {api.used}回使用</span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Weather Card */}
           {weather && (
             <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-4">
