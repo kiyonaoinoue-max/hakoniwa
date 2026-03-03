@@ -51,6 +51,28 @@ export class Brain {
         return { used, max, remaining, percent };
     }
 
+    // Retry wrapper for API calls with backoff
+    private async callWithRetry(prompt: string, maxRetries: number = 2): Promise<string> {
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                const result = await this.model!.generateContent(prompt);
+                this.incrementApiCount();
+                return result.response.text();
+            } catch (error: unknown) {
+                const errMsg = error instanceof Error ? error.message : String(error);
+                const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('rate');
+                if (isRateLimit && attempt < maxRetries) {
+                    const wait = (attempt + 1) * 10000; // 10s, 20s
+                    console.warn(`Rate limited, retrying in ${wait / 1000}s (attempt ${attempt + 1}/${maxRetries})...`);
+                    await new Promise(r => setTimeout(r, wait));
+                } else {
+                    throw error;
+                }
+            }
+        }
+        throw new Error('Max retries exceeded');
+    }
+
     public async processInput(input: string): Promise<string> {
         const now = Date.now();
 
@@ -160,9 +182,7 @@ IMPORTANT for learnedConcepts:
 
 Response (JSON):
 `;
-                const result = await this.model.generateContent(prompt);
-                this.incrementApiCount();
-                const text = result.response.text();
+                const text = await this.callWithRetry(prompt);
 
                 // Parse JSON
                 try {

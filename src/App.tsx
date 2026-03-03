@@ -40,7 +40,7 @@ function App() {
             Notification.requestPermission();
           }
 
-          // Run intro sequence only after memory is loaded
+          // Run intro sequence with wider intervals to avoid 10 RPM rate limit
           setTimeout(async () => {
             const greeting = await brain.generateGreeting();
             if (greeting && isMounted) setBrainState({ ...brain.getMemoryState() });
@@ -56,10 +56,10 @@ function App() {
                 setTimeout(async () => {
                   const recMessage = await brain.checkRecommendationTrigger();
                   if (recMessage && isMounted) setBrainState({ ...brain.getMemoryState() });
-                }, 500);
-              }, 500);
-            }, 500);
-          }, 1000);
+                }, 8000);
+              }, 8000);
+            }, 8000);
+          }, 2000);
 
           // Poll reminders every 30 seconds
           const reminderInterval = setInterval(() => {
