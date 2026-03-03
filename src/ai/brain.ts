@@ -47,6 +47,7 @@ export class Brain {
                 const modeContext = this.memory.getModeContextForPrompt();
                 const shouldEvaluatePersonality = (++this.conversationCount % 5 === 0);
                 this.memory.incrementModeCount();
+                const remindersContext = this.memory.getRemindersForPrompt();
 
                 const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
@@ -63,6 +64,8 @@ Your Capabilities (YOU have these features — mention them naturally when relev
 - 📊 活動パターン分析: ユーザーがいつアプリを使うかを分析し、生活パターンを理解する
 - 🌤️ 天気連動: 現在の天気情報を把握していて、天気に関する質問（「傘いる？」「天気は？」等）に回答できる
 - 🎯 おすすめ: 天気・気分・行動パターンに基づいた活動や食事のおすすめを提案
+- ⏰ リマインド: ユーザーが「○○を思い出させて」「○時に教えて」と言ったら、内容と時刻を登録する。繰り返し（毎日/毎週）も可能。
+${remindersContext}
 
 ${personalityContext ? `YOUR PERSONALITY (follow these traits in your response!):
 ${personalityContext}` : ''}
@@ -93,6 +96,7 @@ Instruction:
 13. Detect if the conversation is "creative/work" (e.g., アイデア, 仕事, 創作, 相談, レビュー, フィードバック) or "daily" (e.g., 雑談, 挨拶, 感情共有, 日常報告). Set modeSwitch accordingly.
 14. If the user seems tired or stressed, you may SUGGEST switching to seed mode: "疲れてるみたいだから、リラックスモードにしませんか？" (This builds trust!)
 15. Set trustDelta based on: +1～3 for empathetic/helpful interaction, -1～3 for off-target response or user frustration.
+16. If the user asks to be reminded of something (e.g., "○○を思い出させて", "○時に教えて", "リマインドして"), extract the content and time. Set reminderSet with the parsed info. If the time is ambiguous, ASK when they want to be reminded. Parse times relative to current time.
 ${mealContext}
 
 Output your response in JSON format ONLY:
@@ -103,7 +107,8 @@ Output your response in JSON format ONLY:
   "learnedConcepts": [{"term": "概念名", "definition": "詳細な説明（特徴、用途、関連情報を含む）"}],
   "mealDetected": null | "メニュー名",
   "modeSwitch": null | "seed" | "harvest",
-  "trustDelta": 0${shouldEvaluatePersonality ? `,
+  "trustDelta": 0,
+  "reminderSet": null | { "content": "リマインド内容", "remindAt": "日時ISO形式 (e.g. 2026-03-04T10:00:00)", "repeat": "none" | "daily" | "weekly" }${shouldEvaluatePersonality ? `,
   "personalityAdjust": { "humor": 0.0, "detail": 0.0, "empathy": 0.0, "curiosity": 0.0, "proactivity": 0.0, "formality": 0.0 }` : ''}
 }
 IMPORTANT - modeSwitch & trustDelta:
@@ -168,6 +173,18 @@ Response (JSON):
                         this.memory.adjustTrust(json.trustDelta);
                     }
 
+                    // Register reminder if set
+                    if (json.reminderSet && json.reminderSet.content && json.reminderSet.remindAt) {
+                        const remindAt = new Date(json.reminderSet.remindAt).getTime();
+                        if (!isNaN(remindAt) && remindAt > Date.now()) {
+                            this.memory.addReminder(
+                                json.reminderSet.content,
+                                remindAt,
+                                json.reminderSet.repeat || 'none'
+                            );
+                        }
+                    }
+
                 } catch (e) {
                     console.error("Failed to parse JSON response:", e);
                     response = text;
@@ -202,6 +219,38 @@ Response (JSON):
         this.memory.addEpisode({ speaker: 'ai', content: response });
 
         return response;
+    }
+
+    // --- Reminder Checker (called periodically from App.tsx) ---
+    public checkReminders(): string | null {
+        const due = this.memory.getDueReminders();
+        if (due.length === 0) return null;
+
+        const messages: string[] = [];
+
+        for (const reminder of due) {
+            const msg = `⏰ リマインド: ${reminder.content}`;
+            messages.push(msg);
+
+            // Browser notification
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification('Hakoniwa リマインド ⏰', {
+                    body: reminder.content,
+                    icon: '/favicon.ico',
+                    tag: reminder.id,
+                });
+            }
+
+            this.memory.markNotified(reminder.id);
+        }
+
+        if (messages.length > 0) {
+            const fullMessage = messages.join('\n');
+            this.memory.addEpisode({ speaker: 'ai', content: fullMessage });
+            return fullMessage;
+        }
+
+        return null;
     }
 
     private getFallbackResponse(input: string, now: number): string {

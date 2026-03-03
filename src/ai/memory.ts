@@ -1,4 +1,4 @@
-import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector, InteractionMode } from './types';
+import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector, InteractionMode, ReminderEntry } from './types';
 
 const STORAGE_KEY = 'hakoniwa_ai_memory_v1';
 
@@ -37,7 +37,8 @@ const INITIAL_STATE: BrainState = {
         trustScore: 30,
         totalSeedCount: 0,
         totalHarvestCount: 0
-    }
+    },
+    reminders: []
 };
 
 import { driveManager } from './drive';
@@ -141,7 +142,8 @@ export class MemoryManager {
             modeState: {
                 ...INITIAL_STATE.modeState,
                 ...(parsed.modeState || {})
-            }
+            },
+            reminders: Array.isArray(parsed.reminders) ? parsed.reminders : []
         };
     }
 
@@ -608,6 +610,77 @@ ${trust >= 50 ? '- 信頼残高が十分なので、必要なら厳しいフィ�
         return `${modeInstructions}
 信頼残高: ${trust}/100 (${trust >= 70 ? '厚い信頼' : trust >= 50 ? '信頼あり' : trust >= 30 ? '関係構築中' : 'まだ浅い関係'})
 累計: 日常${ms.totalSeedCount}回 / 共創${ms.totalHarvestCount}回`;
+    }
+
+    // --- Reminders ---
+    public addReminder(content: string, remindAt: number, repeat: 'daily' | 'weekly' | 'none' = 'none'): ReminderEntry {
+        const reminder: ReminderEntry = {
+            id: `rem_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            content,
+            remindAt,
+            repeat,
+            done: false,
+            notified: false,
+            createdAt: Date.now(),
+        };
+        this.state.reminders.push(reminder);
+        console.log(`Reminder added: "${content}" at ${new Date(remindAt).toLocaleString()}`);
+        this.save();
+        return reminder;
+    }
+
+    public getDueReminders(): ReminderEntry[] {
+        const now = Date.now();
+        return this.state.reminders.filter(r => !r.done && !r.notified && r.remindAt <= now);
+    }
+
+    public markNotified(id: string): void {
+        const reminder = this.state.reminders.find(r => r.id === id);
+        if (reminder) {
+            reminder.notified = true;
+            // Handle repeating reminders
+            if (reminder.repeat && reminder.repeat !== 'none') {
+                this.rescheduleRepeating(reminder);
+            }
+            this.save();
+        }
+    }
+
+    public completeReminder(id: string): void {
+        const reminder = this.state.reminders.find(r => r.id === id);
+        if (reminder) {
+            reminder.done = true;
+            console.log(`Reminder completed: "${reminder.content}"`);
+            this.save();
+        }
+    }
+
+    private rescheduleRepeating(reminder: ReminderEntry): void {
+        const msDay = 24 * 60 * 60 * 1000;
+        const nextTime = reminder.repeat === 'daily'
+            ? reminder.remindAt + msDay
+            : reminder.remindAt + 7 * msDay;
+
+        this.addReminder(reminder.content, nextTime, reminder.repeat);
+        reminder.done = true; // Mark old one as done
+        console.log(`Repeating reminder rescheduled: "${reminder.content}" → ${new Date(nextTime).toLocaleString()}`);
+    }
+
+    public getActiveReminders(): ReminderEntry[] {
+        return this.state.reminders.filter(r => !r.done).sort((a, b) => a.remindAt - b.remindAt);
+    }
+
+    public getRemindersForPrompt(): string {
+        const active = this.getActiveReminders();
+        if (active.length === 0) return '';
+
+        const list = active.slice(0, 5).map(r => {
+            const time = new Date(r.remindAt).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            const repeat = r.repeat && r.repeat !== 'none' ? ` (${r.repeat === 'daily' ? '毎日' : '毎週'})` : '';
+            return `- ${time}: ${r.content}${repeat}`;
+        }).join('\n');
+
+        return `\n登録済みリマインド (${active.length}件):\n${list}`;
     }
 }
 

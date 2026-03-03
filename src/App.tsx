@@ -35,6 +35,11 @@ function App() {
           setBrainState({ ...brain.getMemoryState() });
           setIsInitializing(false);
 
+          // Request notification permission
+          if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+          }
+
           // Run intro sequence only after memory is loaded
           setTimeout(async () => {
             const greeting = await brain.generateGreeting();
@@ -55,6 +60,19 @@ function App() {
               }, 500);
             }, 500);
           }, 1000);
+
+          // Poll reminders every 30 seconds
+          const reminderInterval = setInterval(() => {
+            if (!isMounted) return;
+            const reminderMsg = brain.checkReminders();
+            if (reminderMsg) setBrainState({ ...brain.getMemoryState() });
+          }, 30000);
+
+          // Cleanup interval on unmount
+          return () => {
+            isMounted = false;
+            clearInterval(reminderInterval);
+          };
         }
       };
       init();

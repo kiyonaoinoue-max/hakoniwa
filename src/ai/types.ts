@@ -88,6 +88,16 @@ export interface ModeState {
   totalHarvestCount: number; // 共創モードの累計会話数
 }
 
+export interface ReminderEntry {
+  id: string;
+  content: string;           // リマインド内容
+  remindAt: number;          // リマインド時刻 (Unix timestamp)
+  repeat?: 'daily' | 'weekly' | 'none'; // 繰り返し
+  done: boolean;             // 完了フラグ
+  notified: boolean;         // 通知済みフラグ
+  createdAt: number;         // 作成時刻
+}
+
 export interface BrainState {
   episodes: EpisodicMemory[];
   semantics: Record<string, Semantics>;
@@ -102,6 +112,7 @@ export interface BrainState {
   recommendationTrigger: RecommendationTriggerState;
   personality: PersonalityVector;
   modeState: ModeState;
+  reminders: ReminderEntry[];
   currentEmotion?: string;
   currentIntensity?: number;
 }
