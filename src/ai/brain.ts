@@ -52,7 +52,7 @@ export class Brain {
     }
 
     // Retry wrapper for API calls with backoff
-    private async callWithRetry(prompt: string, maxRetries: number = 2): Promise<string> {
+    private async callWithRetry(prompt: string, maxRetries: number = 3): Promise<string> {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 const result = await this.model!.generateContent(prompt);
@@ -62,7 +62,7 @@ export class Brain {
                 const errMsg = error instanceof Error ? error.message : String(error);
                 const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('rate');
                 if (isRateLimit && attempt < maxRetries) {
-                    const wait = (attempt + 1) * 10000; // 10s, 20s
+                    const wait = (attempt + 1) * 15000; // 15s, 30s, 45s
                     console.warn(`Rate limited, retrying in ${wait / 1000}s (attempt ${attempt + 1}/${maxRetries})...`);
                     await new Promise(r => setTimeout(r, wait));
                 } else {
