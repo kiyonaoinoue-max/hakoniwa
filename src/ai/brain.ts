@@ -5,21 +5,40 @@ import { weatherManager } from './weather';
 
 export class Brain {
     private memory: MemoryManager;
-    private genAI: GoogleGenerativeAI | null = null;
-    private model: GenerativeModel | null = null;
+    private models: GenerativeModel[] = [];
+    private activeModelIndex: number = 0;
     private conversationCount: number = 0;
     private static API_LIMIT = 250;
     private static API_STORAGE_KEY = 'hakoniwa_api_usage';
 
     constructor(memory: MemoryManager) {
         this.memory = memory;
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE') {
-            this.genAI = new GoogleGenerativeAI(apiKey);
-            this.model = this.genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const apiKeys = [
+            import.meta.env.VITE_GEMINI_API_KEY,
+            import.meta.env.VITE_GEMINI_API_KEY_2,
+        ].filter(key => key && key !== 'YOUR_GEMINI_API_KEY_HERE');
+
+        if (apiKeys.length > 0) {
+            this.models = apiKeys.map(key => {
+                const genAI = new GoogleGenerativeAI(key);
+                return genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+            });
+            console.log(`Hakoniwa Brain initialized with ${this.models.length} API key(s)`);
         } else {
             console.warn("Gemini API Key is missing or invalid.");
         }
+    }
+
+    private get model(): GenerativeModel | null {
+        return this.models[this.activeModelIndex] || null;
+    }
+
+    private switchModel(): boolean {
+        if (this.models.length <= 1) return false;
+        const prev = this.activeModelIndex;
+        this.activeModelIndex = (this.activeModelIndex + 1) % this.models.length;
+        console.log(`🔄 API Key switched: ${prev + 1} → ${this.activeModelIndex + 1}`);
+        return true;
     }
 
     // --- API Usage Tracker ---
@@ -51,7 +70,7 @@ export class Brain {
         return { used, max, remaining, percent };
     }
 
-    // Retry wrapper for API calls with backoff
+    // Retry wrapper for API calls with backoff + auto key switching
     private async callWithRetry(prompt: string, maxRetries: number = 3): Promise<string> {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
@@ -62,9 +81,16 @@ export class Brain {
                 const errMsg = error instanceof Error ? error.message : String(error);
                 const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('rate');
                 if (isRateLimit && attempt < maxRetries) {
-                    const wait = (attempt + 1) * 15000; // 15s, 30s, 45s
-                    console.warn(`Rate limited, retrying in ${wait / 1000}s (attempt ${attempt + 1}/${maxRetries})...`);
-                    await new Promise(r => setTimeout(r, wait));
+                    // Try switching to another API key first
+                    const switched = this.switchModel();
+                    if (switched) {
+                        console.warn(`Rate limited, switched API key and retrying immediately (attempt ${attempt + 1}/${maxRetries})...`);
+                        await new Promise(r => setTimeout(r, 2000)); // Brief pause after switch
+                    } else {
+                        const wait = (attempt + 1) * 15000; // 15s, 30s, 45s
+                        console.warn(`Rate limited, retrying in ${wait / 1000}s (attempt ${attempt + 1}/${maxRetries})...`);
+                        await new Promise(r => setTimeout(r, wait));
+                    }
                 } else {
                     throw error;
                 }
