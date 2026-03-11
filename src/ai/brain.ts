@@ -73,6 +73,36 @@ export class Brain {
         throw new Error('Max retries exceeded');
     }
 
+    // JSONレスポンスを安全に抽出するヘルパー
+    private extractJson(text: string): Record<string, unknown> | null {
+        // 1. コードブロック除去
+        let cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+
+        // 2. そのままパースを試行
+        try {
+            return JSON.parse(cleaned);
+        } catch { /* 続行 */ }
+
+        // 3. テキスト中の最初の {...} ブロックを抽出
+        const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            try {
+                return JSON.parse(jsonMatch[0]);
+            } catch { /* 続行 */ }
+        }
+
+        return null;
+    }
+
+    // パース失敗時にresponseフィールドだけを安全に抽出するフォールバック
+    private extractResponseText(text: string): string | null {
+        const match = text.match(/"response"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (match) {
+            return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+        }
+        return null;
+    }
+
     public async processInput(input: string): Promise<string> {
         const now = Date.now();
 
@@ -184,18 +214,18 @@ Response (JSON):
 `;
                 const text = await this.callWithRetry(prompt);
 
-                // Parse JSON
-                try {
-                    const clearText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-                    const json = JSON.parse(clearText);
+                // Parse JSON (堅牢化されたJSON抽出)
+                const json = this.extractJson(text);
+
+                if (json && typeof json.response === 'string') {
                     response = json.response;
 
                     // Update Emotional State
-                    this.memory.setEmotionalState(json.emotion, json.intensity);
+                    this.memory.setEmotionalState(json.emotion as string, json.intensity as number);
 
                     // Auto-learn concepts from Gemini's extraction
                     if (json.learnedConcepts && Array.isArray(json.learnedConcepts)) {
-                        json.learnedConcepts.forEach((concept: { term: string, definition: string }) => {
+                        (json.learnedConcepts as { term: string, definition: string }[]).forEach((concept) => {
                             if (concept.term && concept.definition) {
                                 this.memory.learnConcept(concept.term, concept.definition);
                                 console.log(`Learned: ${concept.term} = ${concept.definition}`);
@@ -205,19 +235,19 @@ Response (JSON):
 
                     // Auto-save meal if detected
                     if (json.mealDetected && typeof json.mealDetected === 'string') {
-                        this.memory.addMealLog(json.mealDetected);
+                        this.memory.addMealLog(json.mealDetected as string);
                         this.memory.clearAwaitingMealResponse();
                         console.log(`Meal logged: ${json.mealDetected}`);
                     }
 
                     // Apply personality adjustments (every 5 conversations)
                     if (json.personalityAdjust && shouldEvaluatePersonality) {
-                        this.memory.updatePersonality(json.personalityAdjust);
+                        this.memory.updatePersonality(json.personalityAdjust as Record<string, number>);
                     }
 
                     // Apply mode switch
                     if (json.modeSwitch === 'seed' || json.modeSwitch === 'harvest') {
-                        this.memory.setMode(json.modeSwitch);
+                        this.memory.setMode(json.modeSwitch as 'seed' | 'harvest');
                     }
 
                     // Apply trust delta
@@ -226,20 +256,26 @@ Response (JSON):
                     }
 
                     // Register reminder if set
-                    if (json.reminderSet && json.reminderSet.content && json.reminderSet.remindAt) {
-                        const remindAt = new Date(json.reminderSet.remindAt).getTime();
+                    const reminderSet = json.reminderSet as { content?: string; remindAt?: string; repeat?: string } | null;
+                    if (reminderSet && reminderSet.content && reminderSet.remindAt) {
+                        const remindAt = new Date(reminderSet.remindAt).getTime();
                         if (!isNaN(remindAt) && remindAt > Date.now()) {
                             this.memory.addReminder(
-                                json.reminderSet.content,
+                                reminderSet.content,
                                 remindAt,
-                                json.reminderSet.repeat || 'none'
+                                (reminderSet.repeat as 'daily' | 'weekly' | 'none') || 'none'
                             );
                         }
                     }
-
-                } catch (e) {
-                    console.error("Failed to parse JSON response:", e);
-                    response = text;
+                } else {
+                    // JSONパース失敗 → responseフィールドだけの抽出を試みる
+                    console.error("Failed to parse JSON response, attempting fallback extraction");
+                    const extracted = this.extractResponseText(text);
+                    if (extracted) {
+                        response = extracted;
+                    } else {
+                        response = "🤔 うまく考えがまとまりませんでした...もう一度話しかけてもらえますか？";
+                    }
                 }
 
             } catch (error: unknown) {
