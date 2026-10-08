@@ -27,9 +27,6 @@ function getConfig() {
     if (!channelSecret) {
         throw new Error('LINE_CHANNEL_SECRET が設定されていません');
     }
-    if (!userId) {
-        throw new Error('LINE_USER_ID が設定されていません');
-    }
 
     return { channelAccessToken, channelSecret, userId };
 }
@@ -98,6 +95,9 @@ async function lineApiRequest(endpoint: string, body: object): Promise<void> {
  */
 export async function pushMessage(text: string): Promise<void> {
     const { userId } = getConfig();
+    if (!userId) {
+        throw new Error('LINE_USER_ID が未設定のため Push メッセージを送信できません');
+    }
     const chunks = splitText(text);
 
     // LINE APIは1回のリクエストで最大5メッセージまで送れる
