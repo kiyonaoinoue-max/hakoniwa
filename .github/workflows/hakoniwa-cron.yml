@@ -1,0 +1,61 @@
+name: Hakoniwa LINE定時通知
+
+on:
+  schedule:
+    # UTC 22:00 = JST 7:00 → 朝の挨拶＋占い
+    - cron: '0 22 * * *'
+    # UTC 3:00 = JST 12:00 → 昼食トリガー
+    - cron: '0 3 * * *'
+    # UTC 9:00 = JST 18:00 → 夕方おすすめ
+    - cron: '0 9 * * *'
+    # UTC 毎時30分 = リマインダーチェック（1時間ごと）
+    - cron: '30 * * * *'
+  workflow_dispatch:
+    inputs:
+      type:
+        description: '通知タイプ (morning/meal/evening/reminder)'
+        required: true
+        default: 'morning'
+        type: choice
+        options:
+          - morning
+          - meal
+          - evening
+          - reminder
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 通知タイプを判定
+        id: type
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "type=${{ github.event.inputs.type }}" >> $GITHUB_OUTPUT
+          else
+            CRON="${{ github.event.schedule }}"
+            case "$CRON" in
+              "0 22 * * *") echo "type=morning" >> $GITHUB_OUTPUT ;;
+              "0 3 * * *")  echo "type=meal" >> $GITHUB_OUTPUT ;;
+              "0 9 * * *")  echo "type=evening" >> $GITHUB_OUTPUT ;;
+              "30 * * * *") echo "type=reminder" >> $GITHUB_OUTPUT ;;
+              *)            echo "type=morning" >> $GITHUB_OUTPUT ;;
+            esac
+          fi
+
+      - name: Hakoniwa通知を送信
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.HAKONIWA_API_URL }}/api/cron/notify?type=${{ steps.type.outputs.type }}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json")
+          
+          echo "Response: $RESPONSE"
+          
+          if [ "$RESPONSE" != "200" ]; then
+            echo "⚠️ 通知送信に失敗しました (HTTP $RESPONSE)"
+            # リマインダーチェックの失敗は無視（通知がない場合も204を返す可能性）
+            if [ "${{ steps.type.outputs.type }}" != "reminder" ] && [ "$RESPONSE" != "204" ]; then
+              exit 1
+            fi
+          fi

@@ -9,5 +9,17 @@
                 }
             ]
         }
+    ],
+    "rewrites": [
+        {
+            "source": "/api/:path*",
+            "destination": "/api/:path*"
+        }
+    ],
+    "crons": [
+        {
+            "path": "/api/cron/notify?type=morning",
+            "schedule": "0 22 * * *"
+        }
     ]
 }
