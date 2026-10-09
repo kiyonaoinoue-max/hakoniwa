@@ -38,6 +38,35 @@ function generateId(): string {
   return `${ts}_${rand}`;
 }
 
+/** 日本時間（JST = UTC+9）の日時情報を安全に取得するヘルパー */
+function getJstDate(timestamp?: number): {
+  date: Date;
+  isoDate: string;
+  dateTimeStr: string;
+  hour: number;
+  minute: number;
+  dayOfWeek: number;
+} {
+  const target = timestamp ? new Date(timestamp) : new Date();
+  const jstTime = new Date(target.getTime() + (9 * 60 + target.getTimezoneOffset()) * 60 * 1000);
+  const year = jstTime.getFullYear();
+  const month = String(jstTime.getMonth() + 1).padStart(2, '0');
+  const day = String(jstTime.getDate()).padStart(2, '0');
+  const hour = jstTime.getHours();
+  const minute = jstTime.getMinutes();
+  const sec = String(jstTime.getSeconds()).padStart(2, '0');
+  const dayOfWeek = jstTime.getDay();
+
+  return {
+    date: jstTime,
+    isoDate: `${year}-${month}-${day}`,
+    dateTimeStr: `${year}/${month}/${day} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${sec} (日本時間)`,
+    hour,
+    minute,
+    dayOfWeek,
+  };
+}
+
 /** リトライ付きAPI呼び出し */
 async function callWithRetry(prompt: string, maxRetries: number = 3): Promise<string> {
   const model = getModel();
@@ -266,11 +295,11 @@ function learnConcept(state: BrainState, term: string, newDefinition: string): v
 
 /** セッション活動をログに記録する */
 function logSessionActivity(state: BrainState): void {
-  const now = new Date();
+  const jst = getJstDate();
   const entry: ActivityLogEntry = {
-    date: now.toISOString().split('T')[0],
-    hour: now.getHours(),
-    dayOfWeek: now.getDay(),
+    date: jst.isoDate,
+    hour: jst.hour,
+    dayOfWeek: jst.dayOfWeek,
   };
 
   // 同じ時間帯の重複を避ける
@@ -669,9 +698,11 @@ export async function processInput(
     incrementModeCount(state);
     const remindersContext = getRemindersForPrompt(state);
 
+    const jst = getJstDate(now);
+
     const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
-Current Time: ${new Date(now).toLocaleString()}
+Current Time: ${jst.dateTimeStr}
 ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
 ${weatherContext ? `\n${weatherContext}` : ''}
 ${weatherRecommendation ? `${weatherRecommendation}` : ''}
@@ -856,7 +887,7 @@ Response (JSON):
  */
 export async function generateMorningMessage(): Promise<string> {
   const state = await loadState();
-  const now = new Date();
+  const jst = getJstDate();
 
   // 天気情報を取得
   await fetchWeather();
@@ -865,7 +896,7 @@ export async function generateMorningMessage(): Promise<string> {
   let greetingMessage = '';
   const lastInteraction = state.episodes.slice(-1)[0];
   const lastTime = lastInteraction ? lastInteraction.timestamp : 0;
-  const hoursSince = (now.getTime() - lastTime) / (1000 * 60 * 60);
+  const hoursSince = (Date.now() - lastTime) / (1000 * 60 * 60);
 
   // 4時間以上経過時のみ挨拶生成
   if (lastTime === 0 || hoursSince >= 4) {
@@ -876,7 +907,7 @@ export async function generateMorningMessage(): Promise<string> {
 
       const greetingPrompt = `
 You are "Hakoniwa", a personal AI assistant.
-Current Time: ${now.toLocaleString()}
+Current Time: ${jst.dateTimeStr}
 Time since last conversation: ${lastTime === 0 ? 'First meeting' : `${Math.round(hoursSince)} hours`}
 ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
 ${weatherContext ? `Current Weather: ${weatherContext}` : ''}
@@ -919,7 +950,7 @@ Output JSON ONLY:
 
   // --- 占い生成 ---
   let fortuneMessage = '';
-  const today = now.toISOString().split('T')[0];
+  const today = jst.isoDate;
 
   if (state.fortuneTrigger.lastFortuneDate !== today) {
     state.fortuneTrigger.lastFortuneDate = today;
@@ -930,12 +961,12 @@ Output JSON ONLY:
       const recentEpisodes = getRecentEpisodes(state, 5)
         .map((ep) => `${ep.speaker === 'user' ? 'User' : 'AI'}: ${ep.content}`)
         .join('\n');
-      const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][now.getDay()];
+      const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][jst.dayOfWeek];
       const weatherContext = getWeatherForPrompt();
 
       const fortunePrompt = `
 You are "Hakoniwa", a personal AI assistant with a mystical fortune-telling persona.
-Current Time: ${now.toLocaleString()}
+Current Time: ${jst.dateTimeStr}
 Day of Week: ${dayOfWeek}曜日
 ${weatherContext ? `Current Weather: ${weatherContext}` : ''}
 
@@ -1009,10 +1040,10 @@ Output JSON ONLY:
  */
 export async function generateMealMessage(): Promise<string | null> {
   const state = await loadState();
-  const now = new Date();
-  const hour = now.getHours();
-  const minute = now.getMinutes();
-  const today = now.toISOString().split('T')[0];
+  const jst = getJstDate();
+  const hour = jst.hour;
+  const minute = jst.minute;
+  const today = jst.isoDate;
 
   let message: string | null = null;
 
@@ -1038,7 +1069,7 @@ export async function generateMealMessage(): Promise<string | null> {
         const mealSummary = getMealSummaryForPrompt(state);
         const prompt = `
 You are "Hakoniwa", a personal AI assistant.
-Current Time: ${now.toLocaleString()}
+Current Time: ${jst.dateTimeStr}
 
 User's meal history:
 ${mealSummary}
@@ -1090,9 +1121,9 @@ Output JSON ONLY:
  */
 export async function generateEveningMessage(): Promise<string | null> {
   const state = await loadState();
-  const now = new Date();
-  const hour = now.getHours();
-  const today = now.toISOString().split('T')[0];
+  const jst = getJstDate();
+  const hour = jst.hour;
+  const today = jst.isoDate;
 
   // --- 17:00-19:00: おすすめ生成 ---
   if (hour < 17 || hour >= 19) {
@@ -1115,14 +1146,14 @@ export async function generateEveningMessage(): Promise<string | null> {
     const activityContext = getActivitySummaryForPrompt(state);
     const mealContext = getMealSummaryForPrompt(state);
     const currentEmotion = state.currentEmotion || 'Neutral';
-    const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][now.getDay()];
+    const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][jst.dayOfWeek];
     const recentRecs = getRecentRecommendations(state, 3)
       .map((r) => `${r.date}: ${r.content}`)
       .join('\n');
 
     const prompt = `
 You are "Hakoniwa", a personal AI that gives personalized evening recommendations.
-Current Time: ${now.toLocaleString()}
+Current Time: ${jst.dateTimeStr}
 Day of Week: ${dayOfWeek}曜日
 
 Context:

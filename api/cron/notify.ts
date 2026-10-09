@@ -46,7 +46,7 @@ export default async function handler(
   }
 
   // Web版URLを取得
-  const webUrl = process.env.HAKONIWA_WEB_URL || 'https://your-app.vercel.app';
+  const webUrl = process.env.HAKONIWA_WEB_URL || 'https://hakoniwa-omega.vercel.app';
   const webFooter = `\n\n🏯 Web版で続きを話す → ${webUrl}`;
 
   try {

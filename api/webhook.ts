@@ -111,7 +111,7 @@ async function handleMessageEvent(event: LineEvent): Promise<void> {
   const { response } = await processInput(userInput);
 
   // Web版への誘導リンクを追加
-  const webUrl = process.env.HAKONIWA_WEB_URL || 'https://your-app.vercel.app';
+  const webUrl = process.env.HAKONIWA_WEB_URL || 'https://hakoniwa-omega.vercel.app';
   const fullResponse = `${response}\n\n🏯 Web版で続きを話す → ${webUrl}`;
 
   // LINE返信
@@ -122,7 +122,7 @@ async function handleMessageEvent(event: LineEvent): Promise<void> {
  * フォロー（友だち追加）イベントを処理する
  */
 async function handleFollowEvent(event: LineEvent): Promise<void> {
-  const webUrl = process.env.HAKONIWA_WEB_URL || 'https://your-app.vercel.app';
+  const webUrl = process.env.HAKONIWA_WEB_URL || 'https://hakoniwa-omega.vercel.app';
 
   const welcomeMessage = `🏯 はじめまして！HAKONIWAへようこそ！
 
