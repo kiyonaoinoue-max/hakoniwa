@@ -3,8 +3,8 @@
 // 既存のsrc/ai/brain.tsとsrc/ai/memory.tsのロジックを関数ベースで移植
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { readMemory, writeMemory } from './drive-server';
-import { fetchWeather, getWeatherForPrompt, getRecommendationContext, isUmbrellaNeeded } from './weather-server';
+import { readMemory, writeMemory } from './drive-server.js';
+import { fetchWeather, getWeatherForPrompt, getRecommendationContext, isUmbrellaNeeded } from './weather-server.js';
 import type {
   BrainState,
   EpisodicMemory,
@@ -15,7 +15,7 @@ import type {
   Recommendation,
   ReminderEntry,
   InteractionMode,
-} from './types';
+} from './types.js';
 
 // ============================================================
 // Gemini API ヘルパー

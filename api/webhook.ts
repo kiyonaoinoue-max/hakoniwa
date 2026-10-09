@@ -3,8 +3,8 @@
 // LINEからのメッセージを受け取り、HAKONIWAで処理して返信する
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { validateSignature, replyMessage } from './lib/line';
-import { processInput } from './lib/brain-server';
+import { validateSignature, replyMessage } from './lib/line.js';
+import { processInput } from './lib/brain-server.js';
 
 /** LINE Webhookイベントの型定義 */
 interface LineEvent {

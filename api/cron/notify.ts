@@ -3,13 +3,13 @@
 // GitHub Actionsから呼ばれ、各種メッセージをLINEにプッシュ通知する
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { pushMessage } from '../lib/line';
+import { pushMessage } from '../lib/line.js';
 import {
   generateMorningMessage,
   generateMealMessage,
   generateEveningMessage,
   checkReminders,
-} from '../lib/brain-server';
+} from '../lib/brain-server.js';
 
 /** 通知タイプ */
 type NotifyType = 'morning' | 'meal' | 'evening' | 'reminder';

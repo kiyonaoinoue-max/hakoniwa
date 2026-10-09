@@ -3,7 +3,7 @@
 // jsonwebtoken ライブラリ非依存：Node.js crypto で JWT を自前生成
 
 import crypto from 'crypto';
-import type { BrainState } from './types';
+import type { BrainState } from './types.js';
 
 // Google OAuth2 トークンエンドポイント
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
