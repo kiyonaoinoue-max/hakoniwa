@@ -22,20 +22,11 @@ function getConfig() {
     const privateKeyRaw = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
     const fileId = process.env.HAKONIWA_DRIVE_FILE_ID;
 
-    if (!serviceAccountEmail) {
-        throw new Error('GOOGLE_SERVICE_ACCOUNT_EMAIL が設定されていません');
-    }
-    if (!privateKeyRaw) {
-        throw new Error('GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY が設定されていません');
-    }
-    if (!fileId) {
-        throw new Error('HAKONIWA_DRIVE_FILE_ID が設定されていません');
+    if (!serviceAccountEmail || !privateKeyRaw || !fileId) {
+        return null;
     }
 
-    // Vercel環境では改行が \\n（リテラルなバックスラッシュ+n）にエスケープされるため、
-    // 実際の改行文字に変換する
     const privateKey = privateKeyRaw.replace(/\\n/g, '\n');
-
     return { serviceAccountEmail, privateKey, fileId };
 }
 
@@ -106,7 +97,11 @@ async function getAccessToken(): Promise<string> {
         return cachedToken.token;
     }
 
-    const { serviceAccountEmail, privateKey } = getConfig();
+    const config = getConfig();
+    if (!config) {
+        throw new Error('Google Drive 設定がありません');
+    }
+    const { serviceAccountEmail, privateKey } = config;
 
     // JWT を生成
     const jwt = createJWT(serviceAccountEmail, privateKey);
@@ -151,8 +146,14 @@ async function getAccessToken(): Promise<string> {
  * Google Drive API v3 の files.get を alt=media で呼び出し、
  * ファイルの内容を直接取得する
  */
-export async function readMemory(): Promise<BrainState> {
-    const { fileId } = getConfig();
+export async function readMemory(): Promise<BrainState | null> {
+    const config = getConfig();
+    if (!config) {
+        console.log('[Drive] Google Drive未設定のため、メモリ読み込みをスキップします');
+        return null;
+    }
+
+    const { fileId } = config;
     const token = await getAccessToken();
 
     // alt=media でファイル内容を直接取得
@@ -184,7 +185,13 @@ export async function readMemory(): Promise<BrainState> {
  * メディアアップロード（uploadType=media）でファイル内容を直接更新する。
  */
 export async function writeMemory(state: BrainState): Promise<void> {
-    const { fileId } = getConfig();
+    const config = getConfig();
+    if (!config) {
+        console.log('[Drive] Google Drive未設定のため、メモリ保存をスキップします');
+        return;
+    }
+
+    const { fileId } = config;
     const token = await getAccessToken();
 
     // uploadType=media でファイル内容を直接更新
