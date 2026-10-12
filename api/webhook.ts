@@ -107,6 +107,15 @@ async function handleMessageEvent(event: LineEvent): Promise<void> {
   const userInput = event.message.text;
   console.log(`受信メッセージ: "${userInput}" (user: ${event.source.userId})`);
 
+  // デバッグ用: ユーザーIDの確認コマンド
+  if (userInput.trim() === 'ID' || userInput.trim() === 'id' || userInput.includes('ユーザーID')) {
+    await replyMessage(
+      event.replyToken,
+      `🔑 あなたのLINEユーザーIDはこちらです:\n\n${event.source.userId}\n\nこの値をVercelの「LINE_USER_ID」に設定してください！`
+    );
+    return;
+  }
+
   // HAKONIWAで応答を生成
   const { response } = await processInput(userInput);
 

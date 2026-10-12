@@ -39,6 +39,7 @@ export default async function handler(
 
   // --- typeパラメータで分岐 ---
   const type = (req.query.type as NotifyType) || (req.body?.type as NotifyType);
+  const force = req.query.force === 'true' || req.body?.force === true;
 
   if (!type) {
     res.status(400).json({ error: 'type parameter is required (morning | meal | evening | reminder)' });
@@ -54,7 +55,7 @@ export default async function handler(
       case 'morning': {
         // --- 朝の挨拶 + 占い ---
         console.log('🌅 朝の通知を生成中...');
-        const message = await generateMorningMessage();
+        const message = await generateMorningMessage(force);
 
         if (message) {
           await pushMessage(`${message}${webFooter}`);

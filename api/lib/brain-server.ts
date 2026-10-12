@@ -885,7 +885,7 @@ Response (JSON):
 /**
  * 朝の挨拶＋占いを生成する
  */
-export async function generateMorningMessage(): Promise<string> {
+export async function generateMorningMessage(force: boolean = false): Promise<string> {
   const state = await loadState();
   const jst = getJstDate();
 
@@ -898,8 +898,8 @@ export async function generateMorningMessage(): Promise<string> {
   const lastTime = lastInteraction ? lastInteraction.timestamp : 0;
   const hoursSince = (Date.now() - lastTime) / (1000 * 60 * 60);
 
-  // 4時間以上経過時のみ挨拶生成
-  if (lastTime === 0 || hoursSince >= 4) {
+  // 4時間以上経過時またはforce時に挨拶生成
+  if (force || lastTime === 0 || hoursSince >= 4) {
     try {
       const activityContext = getActivitySummaryForPrompt(state);
       const weatherContext = getWeatherForPrompt();
@@ -952,7 +952,7 @@ Output JSON ONLY:
   let fortuneMessage = '';
   const today = jst.isoDate;
 
-  if (state.fortuneTrigger.lastFortuneDate !== today) {
+  if (force || state.fortuneTrigger.lastFortuneDate !== today) {
     state.fortuneTrigger.lastFortuneDate = today;
 
     try {
