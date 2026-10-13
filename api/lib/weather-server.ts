@@ -1,10 +1,10 @@
 // 天気情報取得モジュール（サーバーサイド版）
 // Open-Meteo API を使用（無料、APIキー不要）
-// ブラウザの Geolocation API は使えないため、固定座標（東京）を使用
+// ブラウザの Geolocation API は使えないため、固定座標（熊本）を使用
 
-// 東京の座標
-const TOKYO_LAT = 35.6895;
-const TOKYO_LON = 139.6917;
+// 熊本の座標
+const KUMAMOTO_LAT = 32.8032;
+const KUMAMOTO_LON = 130.7079;
 
 /**
  * 天気データの型定義
@@ -65,8 +65,8 @@ let cachedWeather: WeatherData | null = null;
 export async function fetchWeather(): Promise<WeatherData | null> {
     try {
         const url = `https://api.open-meteo.com/v1/forecast`
-            + `?latitude=${TOKYO_LAT}`
-            + `&longitude=${TOKYO_LON}`
+            + `?latitude=${KUMAMOTO_LAT}`
+            + `&longitude=${KUMAMOTO_LON}`
             + `&current_weather=true`
             + `&hourly=precipitation_probability`
             + `&timezone=Asia/Tokyo`

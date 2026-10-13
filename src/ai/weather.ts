@@ -51,9 +51,9 @@ function getWeatherInfo(code: number, isDay: boolean): { label: string; emoji: s
     return { label: info.label, emoji };
 }
 
-// Default: Tokyo
-const DEFAULT_LAT = 35.6895;
-const DEFAULT_LON = 139.6917;
+// Default: Kumamoto
+const DEFAULT_LAT = 32.8032;
+const DEFAULT_LON = 130.7079;
 
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
@@ -78,7 +78,7 @@ export class WeatherManager {
             this.userLon = pos.coords.longitude;
             console.log(`Location resolved: ${this.userLat}, ${this.userLon}`);
         } catch {
-            console.log('Geolocation not available, using Tokyo as default.');
+            console.log('Geolocation not available, using Kumamoto as default.');
         }
         this.locationResolved = true;
     }
