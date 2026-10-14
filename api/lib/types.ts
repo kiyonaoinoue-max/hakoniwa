@@ -118,4 +118,5 @@ export interface BrainState {
     personality: PersonalityVector;
     modeState: ModeState;
     reminders: ReminderEntry[];
+    currentLocation?: string;
 }

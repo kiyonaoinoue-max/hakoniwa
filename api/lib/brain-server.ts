@@ -4,7 +4,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { readMemory, writeMemory } from './drive-server.js';
-import { fetchWeather, getWeatherForPrompt, getRecommendationContext, isUmbrellaNeeded } from './weather-server.js';
+import { fetchWeather, getWeatherForPrompt, getRecommendationContext, isUmbrellaNeeded, findPrefecture } from './weather-server.js';
 import type {
   BrainState,
   EpisodicMemory,
@@ -687,10 +687,30 @@ export async function processInput(
     const conceptsForPrompt = getConceptsForPrompt(state);
     const mealContext = getMealSummaryForPrompt(state);
 
-    // 天気情報を取得
-    await fetchWeather();
-    const weatherContext = getWeatherForPrompt();
-    const weatherRecommendation = getRecommendationContext();
+    // --- 天気・拠点情報の取得 ---
+    const detectedPref = findPrefecture(input);
+    const isLocationChangeIntent = detectedPref && (
+      input.includes('拠点') ||
+      input.includes('出張') ||
+      input.includes('引越') ||
+      input.includes('移動') ||
+      input.includes('場所を') ||
+      input.includes('現在地') ||
+      input.includes('にいる') ||
+      input.includes('に居る') ||
+      input.includes('滞在')
+    );
+
+    if (isLocationChangeIntent && detectedPref) {
+      state.currentLocation = detectedPref.name;
+      console.log(`[Location] 拠点を更新しました: ${detectedPref.name}`);
+    }
+
+    const currentBase = state.currentLocation || '熊本県';
+    const targetLocation = detectedPref || currentBase;
+    const weatherData = await fetchWeather(targetLocation);
+    const weatherContext = getWeatherForPrompt(weatherData);
+    const weatherRecommendation = getRecommendationContext(weatherData);
 
     const personalityContext = getPersonalityForPrompt(state);
     const modeContext = getModeContextForPrompt(state);
@@ -703,6 +723,7 @@ export async function processInput(
     const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
 Current Time: ${jst.dateTimeStr}
+Current Base Location: ${currentBase}
 ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
 ${weatherContext ? `\n${weatherContext}` : ''}
 ${weatherRecommendation ? `${weatherRecommendation}` : ''}
@@ -713,7 +734,7 @@ Your Capabilities (YOU have these features — mention them naturally when relev
 - 🍱 メニュー提案: 食事データが5件以上溜まったら、10:00-11:00に過去の傾向からお昼のメニューを提案する
 - 📖 概念学習: ユーザーが教えてくれたことを覚えて、会話に活かす
 - 📊 活動パターン分析: ユーザーがいつアプリを使うかを分析し、生活パターンを理解する
-- 🌤️ 天気連動: 現在の天気情報を把握していて、天気に関する質問（「傘いる？」「天気は？」等）に回答できる
+- 🌤️ 天気・拠点連動: 47都道府県の天気を把握しています。ユーザーが「東京の天気は？」と聞けばその場所の天気を回答できます。「拠点を福岡にして」「大阪に出張中」等と言われたら拠点を変更し、今後の天気や朝の挨拶もその拠点に切り替えます（現在の拠点: ${currentBase}）。
 - 🎯 おすすめ: 天気・気分・行動パターンに基づいた活動や食事のおすすめを提案
 - ⏰ リマインド: ユーザーが「○○を思い出させて」「○時に教えて」と言ったら、内容と時刻を登録する。繰り返し（毎日/毎週）も可能。
 ${remindersContext}
@@ -742,7 +763,7 @@ Instruction:
 8. If Hakoniwa asked about a meal (lunch) and the user replies with food/menu items, set "mealDetected" to the menu text. Only do this if the context clearly indicates a meal response.
 9. You may naturally mention your features (fortune, meal tracking, etc.) when it fits the conversation. For example, if the user says goodnight, you can say "明日の朝、占い用意しておきますね！". But don't force it.
 10. If the user asks for a fortune (e.g., "占って", "今日の運勢は？"), YOU MUST generate and provide a personalized fortune in your response right now. Output it directly in Japanese!
-11. If the user asks about weather (e.g., "天気は？", "傘いる？", "外出できる？"), use the weather data provided above to answer naturally. Include practical advice based on the conditions.
+11. If the user asks about weather or mentions a location (e.g., "福岡の天気は？", "拠点を東京にして", "出張で大阪にいる"), use the weather data provided above for that location. If the user changed their location/base, confirm it warmly (e.g., "拠点を福岡県に変更しました🏯") and set "locationChanged" to the prefecture name.
 12. If the user asks for recommendations (e.g., "何かおすすめある？", "今日何しよう？"), consider weather, time, their patterns, and mood to give personalized suggestions.
 13. Detect if the conversation is "creative/work" (e.g., アイデア, 仕事, 創作, 相談, レビュー, フィードバック) or "daily" (e.g., 雑談, 挨拶, 感情共有, 日常報告). Set modeSwitch accordingly.
 14. If the user seems tired or stressed, you may SUGGEST switching to seed mode: "疲れてるみたいだから、リラックスモードにしませんか？" (This builds trust!)
@@ -759,7 +780,8 @@ Output your response in JSON format ONLY:
   "mealDetected": null | "メニュー名",
   "modeSwitch": null | "seed" | "harvest",
   "trustDelta": 0,
-  "reminderSet": null | { "content": "リマインド内容", "remindAt": "日時ISO形式 (e.g. 2026-03-04T10:00:00)", "repeat": "none" | "daily" | "weekly" }${evalPersonality ? `,
+  "reminderSet": null | { "content": "リマインド内容", "remindAt": "日時ISO形式 (e.g. 2026-03-04T10:00:00)", "repeat": "none" | "daily" | "weekly" },
+  "locationChanged": null | "都道府県名"${evalPersonality ? `,
   "personalityAdjust": { "humor": 0.0, "detail": 0.0, "empathy": 0.0, "curiosity": 0.0, "proactivity": 0.0, "formality": 0.0 }` : ''}
 }
 IMPORTANT - modeSwitch & trustDelta:
@@ -841,6 +863,15 @@ Response (JSON):
           );
         }
       }
+
+      // 拠点の更新（AI検出）
+      if (json.locationChanged && typeof json.locationChanged === 'string') {
+        const pref = findPrefecture(json.locationChanged);
+        if (pref) {
+          state.currentLocation = pref.name;
+          console.log(`[Location] AI検出により拠点を更新しました: ${pref.name}`);
+        }
+      }
     } else {
       // JSONパース失敗 → responseフィールドだけの抽出を試みる
       console.error('Failed to parse JSON response, attempting fallback extraction');
@@ -889,8 +920,9 @@ export async function generateMorningMessage(force: boolean = false): Promise<st
   const state = await loadState();
   const jst = getJstDate();
 
-  // 天気情報を取得
-  await fetchWeather();
+  // 天気情報を取得（現在の拠点）
+  const targetLocation = state.currentLocation || '熊本県';
+  const weatherData = await fetchWeather(targetLocation);
 
   // --- 挨拶生成 ---
   let greetingMessage = '';
@@ -902,8 +934,8 @@ export async function generateMorningMessage(force: boolean = false): Promise<st
   if (force || lastTime === 0 || hoursSince >= 4) {
     try {
       const activityContext = getActivitySummaryForPrompt(state);
-      const weatherContext = getWeatherForPrompt();
-      const umbrellaNeeded = isUmbrellaNeeded();
+      const weatherContext = getWeatherForPrompt(weatherData);
+      const umbrellaNeeded = isUmbrellaNeeded(weatherData);
 
       const greetingPrompt = `
 You are "Hakoniwa", a personal AI assistant.
@@ -1139,10 +1171,11 @@ export async function generateEveningMessage(): Promise<string | null> {
   let message: string | null = null;
 
   try {
-    // 天気情報を取得
-    await fetchWeather();
-    const weatherContext = getWeatherForPrompt();
-    const weatherRec = getRecommendationContext();
+    // 天気情報を取得（現在の拠点）
+    const targetLocation = state.currentLocation || '熊本県';
+    const weatherData = await fetchWeather(targetLocation);
+    const weatherContext = getWeatherForPrompt(weatherData);
+    const weatherRec = getRecommendationContext(weatherData);
     const activityContext = getActivitySummaryForPrompt(state);
     const mealContext = getMealSummaryForPrompt(state);
     const currentEmotion = state.currentEmotion || 'Neutral';

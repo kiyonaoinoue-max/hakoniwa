@@ -9,6 +9,103 @@ export interface WeatherData {
     windSpeed: number;
     isDay: boolean;
     fetchedAt: number;
+    locationName?: string;
+}
+
+export interface PrefectureCoord {
+    name: string;
+    shortName: string;
+    lat: number;
+    lon: number;
+}
+
+export const PREFECTURES: PrefectureCoord[] = [
+    { name: '北海道', shortName: '北海道', lat: 43.0642, lon: 141.3469 },
+    { name: '青森県', shortName: '青森', lat: 40.8244, lon: 140.7400 },
+    { name: '岩手県', shortName: '岩手', lat: 39.7036, lon: 141.1527 },
+    { name: '宮城県', shortName: '宮城', lat: 38.2682, lon: 140.8694 },
+    { name: '秋田県', shortName: '秋田', lat: 39.7186, lon: 140.1024 },
+    { name: '山形県', shortName: '山形', lat: 38.2404, lon: 140.3636 },
+    { name: '福島県', shortName: '福島', lat: 37.7503, lon: 140.4678 },
+    { name: '茨城県', shortName: '茨城', lat: 36.3418, lon: 140.4468 },
+    { name: '栃木県', shortName: '栃木', lat: 36.5657, lon: 139.8836 },
+    { name: '群馬県', shortName: '群馬', lat: 36.3911, lon: 139.0608 },
+    { name: '埼玉県', shortName: '埼玉', lat: 35.8569, lon: 139.6489 },
+    { name: '千葉県', shortName: '千葉', lat: 35.6051, lon: 140.1233 },
+    { name: '東京都', shortName: '東京', lat: 35.6895, lon: 139.6917 },
+    { name: '神奈川県', shortName: '神奈川', lat: 35.4478, lon: 139.6425 },
+    { name: '新潟県', shortName: '新潟', lat: 37.9022, lon: 139.0236 },
+    { name: '富山県', shortName: '富山', lat: 36.6953, lon: 137.2113 },
+    { name: '石川県', shortName: '石川', lat: 36.5947, lon: 136.6256 },
+    { name: '福井県', shortName: '福井', lat: 36.0652, lon: 136.2216 },
+    { name: '山梨県', shortName: '山梨', lat: 35.6639, lon: 138.5684 },
+    { name: '長野県', shortName: '長野', lat: 36.6513, lon: 138.1810 },
+    { name: '岐阜県', shortName: '岐阜', lat: 35.3912, lon: 136.7223 },
+    { name: '静岡県', shortName: '静岡', lat: 34.9770, lon: 138.3831 },
+    { name: '愛知県', shortName: '愛知', lat: 35.1802, lon: 136.9066 },
+    { name: '三重県', shortName: '三重', lat: 34.7303, lon: 136.5086 },
+    { name: '滋賀県', shortName: '滋賀', lat: 35.0045, lon: 135.8686 },
+    { name: '京都府', shortName: '京都', lat: 35.0210, lon: 135.7556 },
+    { name: '大阪府', shortName: '大阪', lat: 34.6863, lon: 135.5200 },
+    { name: '兵庫県', shortName: '兵庫', lat: 34.6913, lon: 135.1830 },
+    { name: '奈良県', shortName: '奈良', lat: 34.6853, lon: 135.8327 },
+    { name: '和歌山県', shortName: '和歌山', lat: 34.2260, lon: 135.1675 },
+    { name: '鳥取県', shortName: '鳥取', lat: 35.5036, lon: 134.2383 },
+    { name: '島根県', shortName: '島根', lat: 35.4723, lon: 133.0505 },
+    { name: '岡山県', shortName: '岡山', lat: 34.6618, lon: 133.9344 },
+    { name: '広島県', shortName: '広島', lat: 34.3963, lon: 132.4594 },
+    { name: '山口県', shortName: '山口', lat: 34.1859, lon: 131.4705 },
+    { name: '徳島県', shortName: '徳島', lat: 34.0658, lon: 134.5594 },
+    { name: '香川県', shortName: '香川', lat: 34.3402, lon: 134.0433 },
+    { name: '愛媛県', shortName: '愛媛', lat: 33.8416, lon: 132.7657 },
+    { name: '高知県', shortName: '高知', lat: 33.5597, lon: 133.5311 },
+    { name: '福岡県', shortName: '福岡', lat: 33.6064, lon: 130.4183 },
+    { name: '佐賀県', shortName: '佐賀', lat: 33.2494, lon: 130.2988 },
+    { name: '長崎県', shortName: '長崎', lat: 32.7448, lon: 129.8737 },
+    { name: '熊本県', shortName: '熊本', lat: 32.8032, lon: 130.7079 },
+    { name: '大分県', shortName: '大分', lat: 33.2382, lon: 131.6126 },
+    { name: '宮崎県', shortName: '宮崎', lat: 31.9111, lon: 131.4239 },
+    { name: '鹿児島県', shortName: '鹿児島', lat: 31.5602, lon: 130.5581 },
+    { name: '沖縄県', shortName: '沖縄', lat: 26.2124, lon: 127.6809 },
+];
+
+const CITY_ALIASES: Record<string, string> = {
+    '博多': '福岡県',
+    '天神': '福岡県',
+    '小倉': '福岡県',
+    '北九州': '福岡県',
+    '札幌': '北海道',
+    '函館': '北海道',
+    '仙台': '宮城県',
+    '横浜': '神奈川県',
+    '川崎': '神奈川県',
+    '名古屋': '愛知県',
+    '神戸': '兵庫県',
+    '那覇': '沖縄県',
+    '阿蘇': '熊本県',
+    '天草': '熊本県',
+    '八代': '熊本県',
+    '玉名': '熊本県',
+    '菊池': '熊本県',
+};
+
+export const DEFAULT_PREFECTURE: PrefectureCoord = PREFECTURES.find(p => p.shortName === '熊本')!;
+
+export function findPrefecture(text: string): PrefectureCoord | null {
+    if (!text) return null;
+    for (const [alias, prefName] of Object.entries(CITY_ALIASES)) {
+        if (text.includes(alias)) {
+            const found = PREFECTURES.find(p => p.name === prefName);
+            if (found) return found;
+        }
+    }
+    for (const pref of PREFECTURES) {
+        if (text.includes(pref.name)) return pref;
+    }
+    for (const pref of PREFECTURES) {
+        if (text.includes(pref.shortName)) return pref;
+    }
+    return null;
 }
 
 // WMO Weather Code mapping
@@ -51,17 +148,28 @@ function getWeatherInfo(code: number, isDay: boolean): { label: string; emoji: s
     return { label: info.label, emoji };
 }
 
-// Default: Kumamoto
-const DEFAULT_LAT = 32.8032;
-const DEFAULT_LON = 130.7079;
-
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
 export class WeatherManager {
     private cache: WeatherData | null = null;
-    private userLat: number = DEFAULT_LAT;
-    private userLon: number = DEFAULT_LON;
+    private userLat: number = DEFAULT_PREFECTURE.lat;
+    private userLon: number = DEFAULT_PREFECTURE.lon;
+    private locationName: string = DEFAULT_PREFECTURE.name;
     private locationResolved = false;
+
+    /** 手動で場所（都道府県）を設定する */
+    public setLocation(prefName: string): boolean {
+        const p = findPrefecture(prefName);
+        if (p) {
+            this.userLat = p.lat;
+            this.userLon = p.lon;
+            this.locationName = p.name;
+            this.locationResolved = true;
+            this.cache = null;
+            return true;
+        }
+        return false;
+    }
 
     /** Try to get user's location via browser geolocation */
     public async resolveLocation(): Promise<void> {
@@ -76,15 +184,20 @@ export class WeatherManager {
             });
             this.userLat = pos.coords.latitude;
             this.userLon = pos.coords.longitude;
+            this.locationName = '現在地';
             console.log(`Location resolved: ${this.userLat}, ${this.userLon}`);
         } catch {
-            console.log('Geolocation not available, using Kumamoto as default.');
+            console.log(`Geolocation not available, using ${this.locationName} as default.`);
         }
         this.locationResolved = true;
     }
 
     /** Fetch weather from Open-Meteo API */
-    public async fetchWeather(): Promise<WeatherData | null> {
+    public async fetchWeather(targetPrefName?: string): Promise<WeatherData | null> {
+        if (targetPrefName) {
+            this.setLocation(targetPrefName);
+        }
+
         // Return cache if still valid
         if (this.cache && (Date.now() - this.cache.fetchedAt) < CACHE_DURATION) {
             return this.cache;
@@ -120,9 +233,10 @@ export class WeatherManager {
                 windSpeed: Math.round(current.windspeed),
                 isDay: current.is_day === 1,
                 fetchedAt: Date.now(),
+                locationName: this.locationName,
             };
 
-            console.log(`Weather fetched: ${emoji} ${label} ${this.cache.temperature}°C`);
+            console.log(`Weather fetched (${this.locationName}): ${emoji} ${label} ${this.cache.temperature}°C`);
             return this.cache;
 
         } catch (e) {
@@ -148,7 +262,8 @@ export class WeatherManager {
         if (!this.cache) return '';
 
         const parts: string[] = [];
-        parts.push(`現在の天気: ${this.cache.weatherEmoji} ${this.cache.weatherLabel}`);
+        const loc = this.cache.locationName ? ` (${this.cache.locationName})` : '';
+        parts.push(`現在の天気${loc}: ${this.cache.weatherEmoji} ${this.cache.weatherLabel}`);
         parts.push(`気温: ${this.cache.temperature}°C`);
 
         if (this.cache.precipitationProbability > 0) {

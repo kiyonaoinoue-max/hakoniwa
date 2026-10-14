@@ -115,4 +115,5 @@ export interface BrainState {
   reminders: ReminderEntry[];
   currentEmotion?: string;
   currentIntensity?: number;
+  currentLocation?: string;
 }
