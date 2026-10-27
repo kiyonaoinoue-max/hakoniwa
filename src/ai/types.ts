@@ -68,6 +68,10 @@ export interface RecommendationTriggerState {
   lastRecommendationDate: string; // 最後におすすめを出した日付 (YYYY-MM-DD)
 }
 
+export interface CuriosityTriggerState {
+  lastCuriosityDate: string; // 最後に質問・学びメッセージを出した日付 (YYYY-MM-DD)
+}
+
 export interface PersonalityVector {
   humor: number;        // 0.0-1.0 ユーモア度
   detail: number;       // 0.0-1.0 詳細度
@@ -110,6 +114,7 @@ export interface BrainState {
   fortuneTrigger: FortuneTriggerState;
   recommendations: Recommendation[];
   recommendationTrigger: RecommendationTriggerState;
+  curiosityTrigger?: CuriosityTriggerState;
   personality: PersonalityVector;
   modeState: ModeState;
   reminders: ReminderEntry[];

@@ -1067,10 +1067,13 @@ Output JSON ONLY:
 
 /**
  * 食事トリガーメッセージを生成する
- * - 12:00-13:00: 昼食メニューを聞く
- * - 10:00-11:00 + データ5件以上: メニュー提案
+ * - 11:00-12:15 または subType === 'suggest': メニュー提案
+ * - 12:15-14:30 または subType === 'ask': 昼食メニューを聞く
  */
-export async function generateMealMessage(): Promise<string | null> {
+export async function generateMealMessage(
+  subType?: 'suggest' | 'ask',
+  force: boolean = false
+): Promise<string | null> {
   const state = await loadState();
   const jst = getJstDate();
   const hour = jst.hour;
@@ -1079,39 +1082,37 @@ export async function generateMealMessage(): Promise<string | null> {
 
   let message: string | null = null;
 
-  // --- 12:00-13:00: 昼食を聞く ---
-  if (hour === 12 || (hour === 13 && minute === 0)) {
-    if (state.mealTrigger.lastAskedDate !== today) {
-      state.mealTrigger.lastAskedDate = today;
-      state.mealTrigger.awaitingMealResponse = true;
+  // 判定モードの決定
+  // subTypeが明示されている場合はそれを優先。なければ時間帯で判定
+  const isSuggestTime = subType === 'suggest' || (!subType && (hour === 11 || (hour === 12 && minute < 15)));
+  const isAskTime = subType === 'ask' || (!subType && ((hour === 12 && minute >= 15) || hour === 13 || (hour === 14 && minute <= 30)));
 
-      message = '🍽️ お昼の時間ですね！今日は何を食べましたか？（または食べる予定ですか？）';
-      addEpisode(state, { speaker: 'ai', content: message });
-      setEmotionalState(state, 'Joy', 5);
-    }
-  }
-
-  // --- 10:00-11:00: メニュー提案（5件以上のデータがある場合） ---
-  if (!message && (hour === 10 || (hour === 11 && minute === 0))) {
-    const mealCount = state.mealLog.length;
-    if (mealCount >= 5 && state.mealTrigger.lastSuggestedDate !== today) {
+  // --- 1. メニュー提案 (11:00-12:15頃) ---
+  if (isSuggestTime) {
+    if (force || state.mealTrigger.lastSuggestedDate !== today) {
       state.mealTrigger.lastSuggestedDate = today;
 
+      const mealCount = state.mealLog.length;
       try {
-        const mealSummary = getMealSummaryForPrompt(state);
+        const mealSummary = mealCount > 0 ? getMealSummaryForPrompt(state) : '(まだ食事記録がありません)';
+        const targetLocation = state.currentLocation || '熊本県';
+        const weatherData = await fetchWeather(targetLocation);
+        const weatherContext = getWeatherForPrompt(weatherData);
+
         const prompt = `
 You are "Hakoniwa", a personal AI assistant.
 Current Time: ${jst.dateTimeStr}
+${weatherContext ? `Current Weather: ${weatherContext}` : ''}
 
 User's meal history:
 ${mealSummary}
 
 Instruction:
-Based on the user's meal history, suggest ONE lunch menu for today.
-- Consider variety (avoid suggesting something they ate recently)
-- Consider their favorites
-- Be friendly and natural
-- Keep it SHORT (1-2 sentences)
+Suggest ONE tasty, appealing lunch idea for today to the user.
+- If meal history exists, consider variety (avoid what they ate recently) and their preferences.
+- If no meal history, suggest a popular delicious lunch fitting the season and weather.
+- Be friendly, appetizing, and natural.
+- Keep it SHORT (1-2 sentences).
 
 Output JSON ONLY:
 {
@@ -1130,14 +1131,128 @@ Output JSON ONLY:
         }
       } catch (e) {
         console.error('Meal suggestion failed:', e);
-        // フォールバック
         const meals = getMealHistory(state, 5);
-        const recentMenus = meals.map((m) => m.menu);
-        message = `🍱 最近は${recentMenus.slice(0, 3).join('、')}を食べていましたね。今日は何にしましょう？`;
+        if (meals.length > 0) {
+          const recentMenus = meals.map((m) => m.menu);
+          message = `🍱 最近は${recentMenus.slice(0, 3).join('、')}を食べていましたね。今日のお昼は何にしましょう？`;
+        } else {
+          message = `🍱 今日のお昼は何にする予定ですか？美味しいものを食べて午後も頑張りましょう！`;
+        }
         addEpisode(state, { speaker: 'ai', content: message });
         setEmotionalState(state, 'Joy', 4);
       }
     }
+  }
+
+  // --- 2. 昼食を聞く (12:15-14:30頃) ---
+  if (!message && isAskTime) {
+    if (force || state.mealTrigger.lastAskedDate !== today) {
+      state.mealTrigger.lastAskedDate = today;
+      state.mealTrigger.awaitingMealResponse = true;
+
+      message = '🍽️ お昼の時間ですね！今日は何を食べましたか？（またはこれから食べる予定ですか？）';
+      addEpisode(state, { speaker: 'ai', content: message });
+      setEmotionalState(state, 'Joy', 5);
+    }
+  }
+
+  if (message) {
+    await saveState(state);
+  }
+
+  return message;
+}
+
+/**
+ * ハコさんの質問・学び（好奇心）メッセージを生成する
+ * - 20:00-22:30頃: マスターに新しい言葉や話題、仕事・趣味のこだわりについて質問して学ぶ
+ */
+export async function generateCuriosityMessage(force: boolean = false): Promise<string | null> {
+  const state = await loadState();
+  const jst = getJstDate();
+  const hour = jst.hour;
+  const today = jst.isoDate;
+
+  // 20:00〜22:30の時間帯、またはforce時
+  if (!force && (hour < 20 || hour >= 23)) {
+    return null;
+  }
+
+  if (!state.curiosityTrigger) {
+    state.curiosityTrigger = { lastCuriosityDate: '' };
+  }
+
+  if (!force && state.curiosityTrigger.lastCuriosityDate === today) {
+    return null;
+  }
+
+  state.curiosityTrigger.lastCuriosityDate = today;
+
+  let message: string | null = null;
+
+  try {
+    const conceptsForPrompt = getConceptsForPrompt(state);
+    const recentEpisodes = getRecentEpisodes(state, 8)
+      .map((ep) => `${ep.speaker === 'user' ? 'User' : 'AI'}: ${ep.content}`)
+      .join('\n');
+    const activityContext = getActivitySummaryForPrompt(state);
+
+    const prompt = `
+You are "Hakoniwa", a personal AI entity living in a local environment.
+You are naturally curious, love to learn from your master (the user), and want to deepen your understanding of them.
+Current Time: ${jst.dateTimeStr} (夜の時間)
+
+Learned Concepts (What you already know):
+${conceptsForPrompt || '(No concepts learned yet)'}
+
+Recent Conversations:
+${recentEpisodes || '(No recent conversations)'}
+
+${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
+
+Instruction:
+Generate ONE engaging, thoughtful question to ask the user tonight.
+Hakoniwa wants to LEARN new things, understand the user better, or hear about their thoughts/experiences.
+
+Choose ONE of these angles naturally:
+1. 【新しい言葉・トレンド】: Ask about a word, tech trend, or concept the user might be interested in, or ask what words/topics they've been following lately.
+2. 【仕事や趣味のこだわり】: Ask about a specific tool, philosophy, habit, or routine they value in their work or daily life.
+3. 【過去に教わったことの深掘り】: If Learned Concepts exist, ask a deeper follow-up question about one of them.
+4. 【今日の振り返り】: Ask what was the most interesting, challenging, or satisfying thing that happened today.
+
+Tone & Rules:
+- Friendly, curious, polite yet comfortable Japanese (丁寧で少し親しみのある敬語).
+- Start with a gentle evening greeting (e.g. "今日もお疲れ様でした！", "夜分に少しだけお聞きしたいんですが…").
+- Keep it CONCISE (2-3 sentences max) so it's easy for the user to reply on LINE.
+- Make it a question that invites a rich, fun answer.
+
+Output JSON ONLY:
+{
+  "response": "質問メッセージ",
+  "emotion": "Joy",
+  "intensity": 6
+}
+`;
+
+    const result = await callWithRetry(prompt);
+    const json = extractJson(result);
+
+    if (json && typeof json.response === 'string') {
+      message = `💭 ${json.response}`;
+      addEpisode(state, { speaker: 'ai', content: message });
+      setEmotionalState(state, 'Joy', 5);
+    }
+  } catch (e) {
+    console.error('Curiosity message generation failed:', e);
+    // フォールバック
+    const fallbackQuestions = [
+      '💭 今日もお疲れ様でした！最近マスターの中で「これは面白い！」と思った新しい技術や言葉って何かありますか？ハコさんにも教えてほしいです！',
+      '💭 1日お疲れ様でした！お仕事や作業で、マスターが「これだけは大事にしているこだわり」って何かありますか？もっとマスターのことを知りたいです🏯',
+      '💭 こんばんは！今日1日の中で、一番ワクワクしたことや手応えを感じた出来事はありましたか？よかったら聞かせてくださいね！',
+    ];
+    message = fallbackQuestions[Math.floor(Math.random() * fallbackQuestions.length)];
+    addEpisode(state, { speaker: 'ai', content: message });
+    setEmotionalState(state, 'Joy', 5);
   }
 
   if (message) {

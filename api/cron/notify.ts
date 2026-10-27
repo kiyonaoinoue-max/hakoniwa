@@ -8,11 +8,12 @@ import {
   generateMorningMessage,
   generateMealMessage,
   generateEveningMessage,
+  generateCuriosityMessage,
   checkReminders,
 } from '../lib/brain-server.js';
 
 /** 通知タイプ */
-type NotifyType = 'morning' | 'meal' | 'evening' | 'reminder';
+type NotifyType = 'morning' | 'meal' | 'meal_suggest' | 'meal_ask' | 'evening' | 'curiosity' | 'reminder';
 
 export default async function handler(
   req: VercelRequest,
@@ -68,10 +69,13 @@ export default async function handler(
         break;
       }
 
-      case 'meal': {
+      case 'meal':
+      case 'meal_suggest':
+      case 'meal_ask': {
         // --- 食事トリガー ---
-        console.log('🍽️ 食事通知を生成中...');
-        const message = await generateMealMessage();
+        console.log(`🍽️ 食事通知を生成中... (type=${type})`);
+        const subType = type === 'meal_suggest' ? 'suggest' : type === 'meal_ask' ? 'ask' : undefined;
+        const message = await generateMealMessage(subType, force);
 
         if (message) {
           await pushMessage(`${message}${webFooter}`);
@@ -96,6 +100,22 @@ export default async function handler(
         } else {
           console.log('ℹ️ 夕方のおすすめ通知: 生成条件を満たさず');
           res.status(200).json({ success: true, type, message: 'No evening message needed' });
+        }
+        break;
+      }
+
+      case 'curiosity': {
+        // --- 好奇心・質問（学び）メッセージ ---
+        console.log('💭 質問・学び通知を生成中...');
+        const message = await generateCuriosityMessage(force);
+
+        if (message) {
+          await pushMessage(`${message}${webFooter}`);
+          console.log('✅ 質問・学び通知を送信しました');
+          res.status(200).json({ success: true, type, message: 'Curiosity message sent' });
+        } else {
+          console.log('ℹ️ 質問・学び通知: 生成条件を満たさず');
+          res.status(200).json({ success: true, type, message: 'No curiosity message needed' });
         }
         break;
       }
@@ -125,7 +145,7 @@ export default async function handler(
       default:
         res.status(400).json({
           error: `Invalid type: ${type}`,
-          validTypes: ['morning', 'meal', 'evening', 'reminder'],
+          validTypes: ['morning', 'meal', 'meal_suggest', 'meal_ask', 'evening', 'curiosity', 'reminder'],
         });
         break;
     }

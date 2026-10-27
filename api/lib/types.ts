@@ -71,6 +71,10 @@ export interface RecommendationTriggerState {
     lastRecommendationDate: string;
 }
 
+export interface CuriosityTriggerState {
+    lastCuriosityDate: string;
+}
+
 export interface PersonalityVector {
     humor: number;
     detail: number;
@@ -115,6 +119,7 @@ export interface BrainState {
     fortuneTrigger: FortuneTriggerState;
     recommendations: Recommendation[];
     recommendationTrigger: RecommendationTriggerState;
+    curiosityTrigger?: CuriosityTriggerState;
     personality: PersonalityVector;
     modeState: ModeState;
     reminders: ReminderEntry[];
