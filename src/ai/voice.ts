@@ -1,4 +1,4 @@
-// VOICEVOX (ローカルエンジン + Web API 分割連続再生 + スマホブラウザ自動再生ロック解除対応) & Web Speech API 音声認識マネージャー
+// VOICEVOX (ローカルエンジン + Web API 一括合成・事前プリロード・重複リクエスト防止・スマホAudioアンロック対応)
 
 export type VoicePlaybackPhase = 'idle' | 'loading' | 'playing';
 
@@ -43,6 +43,12 @@ interface VoiceSettings {
     speedScale: number;
 }
 
+interface CachedAudioItem {
+    url: string;
+    applyRate: boolean;
+    createdAt: number;
+}
+
 const VOICE_STORAGE_KEY = 'hakoniwa_voice_settings_v1';
 
 // スマホブラウザ(iOS Safari / Android Chrome)でタップ直後にAudio再生権限をアンロックするための極小無音WAV
@@ -55,7 +61,11 @@ export class VoiceManager {
     private phase: VoicePlaybackPhase = 'idle';
     private activeId: string | null = null;
     private activeRequestId = 0;
-    private audioUrlCache = new Map<string, string>();
+
+    // 合成済み音声キャッシュ & 現在進行中の合成Promise（二重リクエストで429になるのを完全に防ぐ）
+    private audioCache = new Map<string, CachedAudioItem>();
+    private inflightRequests = new Map<string, Promise<CachedAudioItem | null>>();
+
     private onStateChange?: (speaking: boolean) => void;
     private onStatusChange?: (status: VoiceStatusSnapshot) => void;
 
@@ -146,8 +156,13 @@ export class VoiceManager {
         try {
             this.sharedAudio.src = SILENT_WAV_DATA_URI;
             const p = this.sharedAudio.play();
-            if (p && typeof p.catch === 'function') {
-                p.catch(() => { /* ignore initial unlock error */ });
+            if (p && typeof p.then === 'function') {
+                p.then(() => {
+                    // まだloading中なら無音再生をすぐ止めて待機させる
+                    if (this.phase === 'loading' && this.sharedAudio) {
+                        this.sharedAudio.pause();
+                    }
+                }).catch(() => { /* ignore initial unlock error */ });
             }
         } catch { /* ignore */ }
         return this.sharedAudio;
@@ -176,7 +191,6 @@ export class VoiceManager {
         return text
             .replace(/https?:\/\/[^\s]+/g, '')
             .replace(/🔗\s*出典:?/g, '')
-            // VOICEVOXのイントネーション崩壊を防ぐため頻出英単語をカタカナ化
             .replace(/Hakoniwa/gi, 'ハコニワ')
             .replace(/Nao/gi, 'ナオ')
             .replace(/AI/g, 'エーアイ')
@@ -185,39 +199,32 @@ export class VoiceManager {
             .replace(/Wikipedia/gi, 'ウィキペディア')
             .replace(/VOICEVOX/gi, 'ボイスボックス')
             .replace(/Google/gi, 'グーグル')
-            .replace(/「|」|『|』/g, '、') // カギカッコでイントネーションが跳ねるのを防ぐ
+            .replace(/「|」|『|』/g, '、')
             .replace(/[★☆]{2,}/g, (m) => `星${(m.match(/★/g) || []).length}つ。`)
             .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+            .replace(/\s+/g, ' ')
             .trim();
     }
 
     /**
-     * 長文でもボタンを押してすぐ（約1秒）に話し始められるよう、
-     * 「最初の1文（30〜85文字程度）」だけを第1チャンクとして小さく切り出し、
-     * それをしゃべっている裏で残りのチャンクを先読み合成（プリフェッチ）する分割方式
+     * Web VOICEVOX API (tts.quest) は短時間に複数回リクエストを送ると 429 (40秒制限) になるため、
+     * 通常のメッセージ（350文字まで）は絶対に分割せず「1回のリクエスト」で丸ごと合成する。
      */
     private splitIntoChunks(cleanedText: string): string[] {
-        if (cleanedText.length <= 85) {
+        if (cleanedText.length <= 350) {
             return [cleanedText];
         }
 
         const rawSentences = cleanedText
             .split(/(?<=[。！？!?\n])\s*/)
-            .map(s => s.replace(/\s+/g, ' ').trim())
+            .map(s => s.trim())
             .filter(s => s.length > 0);
-
-        if (rawSentences.length <= 1) {
-            return [cleanedText];
-        }
 
         const chunks: string[] = [];
         let current = '';
 
         for (const sentence of rawSentences) {
-            // 第1チャンクだけは早く話し始めるために80文字前後で早めに確定する
-            const maxLenForCurrentChunk = chunks.length === 0 ? 80 : 240;
-
-            if ((current + sentence).length > maxLenForCurrentChunk && current) {
+            if ((current + sentence).length > 320 && current) {
                 chunks.push(current);
                 current = sentence;
             } else {
@@ -228,6 +235,20 @@ export class VoiceManager {
             chunks.push(current);
         }
         return chunks;
+    }
+
+    /**
+     * ハコさんから新しいメッセージが届いた時点で、裏側でこっそり1チャンク目を事前合成しておく。
+     * これでマスターが文章を読んでから「再生」ボタンを押した時には待ち時間0秒で即再生される！
+     */
+    public preloadMessage(rawText: string): void {
+        const cleaned = this.cleanTextForSpeech(rawText);
+        if (!cleaned) return;
+        const chunks = this.splitIntoChunks(cleaned);
+        if (chunks.length === 0) return;
+
+        // 最初の塊（350文字以内なら全文）をバックグラウンドで合成開始しておく
+        void this.getOrSynthesizeChunk(chunks[0], this.settings.speakerId);
     }
 
     /**
@@ -243,7 +264,6 @@ export class VoiceManager {
 
     /**
      * ハコさんの返答をVOICEVOXで最後まで同じ声質で読み上げる
-     * （第1チャンクを再生中に、裏で次のチャンクを先読み合成することで待ち時間を大幅短縮！）
      */
     public async speak(
         rawText: string,
@@ -270,33 +290,27 @@ export class VoiceManager {
         const speaker = overrideSpeakerId ?? this.settings.speakerId;
 
         try {
-            // 最初のチャンクの合成を開始
-            let nextChunkPromise: Promise<{ url: string; revoke: boolean; applyRate: boolean } | null> | null =
-                this.prepareChunkAudioUrl(chunks[0], speaker, reqId);
-
             for (let i = 0; i < chunks.length; i++) {
                 if (reqId !== this.activeRequestId) return;
 
                 this.updateStatus('loading', targetId);
-                const audioInfo = await nextChunkPromise;
+                const audioInfo = await this.getOrSynthesizeChunk(chunks[i], speaker);
                 if (reqId !== this.activeRequestId) return;
-
-                // いま取得したチャンクを再生開始する直前に、次のチャンク(i+1)を裏で先読み合成スタート！
-                if (i + 1 < chunks.length) {
-                    const nextText = chunks[i + 1];
-                    nextChunkPromise = (async () => {
-                        // Web APIの連続リクエスト制限を避けるため、しゃべっている裏で1秒だけ待ってから合成リクエスト
-                        await new Promise(r => setTimeout(r, 1000));
-                        if (reqId !== this.activeRequestId) return null;
-                        return this.prepareChunkAudioUrl(nextText, speaker, reqId);
-                    })();
-                } else {
-                    nextChunkPromise = null;
-                }
 
                 if (audioInfo) {
                     this.updateStatus('playing', targetId);
-                    await this.playAudioUrl(audioInfo.url, audioInfo.revoke, audioInfo.applyRate, reqId);
+                    const playedOk = await this.playAudioUrl(audioInfo.url, audioInfo.applyRate, reqId);
+                    // もし一時URLの期限切れ等で再生エラーになった場合はキャッシュを破棄して1回だけ再合成する
+                    if (!playedOk && reqId === this.activeRequestId) {
+                        const cacheKey = `${speaker}:${chunks[i]}`;
+                        this.audioCache.delete(cacheKey);
+                        this.updateStatus('loading', targetId);
+                        const retryInfo = await this.getOrSynthesizeChunk(chunks[i], speaker);
+                        if (retryInfo && reqId === this.activeRequestId) {
+                            this.updateStatus('playing', targetId);
+                            await this.playAudioUrl(retryInfo.url, retryInfo.applyRate, reqId);
+                        }
+                    }
                 }
             }
         } finally {
@@ -307,36 +321,56 @@ export class VoiceManager {
     }
 
     /**
-     * 1チャンク分の音声URLを キャッシュ → ローカルVOICEVOX → Web VOICEVOX の順で取得する
+     * キャッシュ確認 → 進行中の同じ合成Promiseがあれば合流 → なければ新規合成
+     * （同じ文章のボタンを連打したり、事前プリロード中にボタンを押しても2重リクエストにならない！）
      */
-    private async prepareChunkAudioUrl(
+    private async getOrSynthesizeChunk(
         chunkText: string,
-        speaker: number,
-        reqId: number
-    ): Promise<{ url: string; revoke: boolean; applyRate: boolean } | null> {
+        speaker: number
+    ): Promise<CachedAudioItem | null> {
         const cacheKey = `${speaker}:${chunkText}`;
-        const cachedUrl = this.audioUrlCache.get(cacheKey);
-        if (cachedUrl) {
-            return { url: cachedUrl, revoke: false, applyRate: true };
+
+        // 1. キャッシュにあれば（かつ作成から10分以内なら）即返す
+        const cached = this.audioCache.get(cacheKey);
+        if (cached && Date.now() - cached.createdAt < 10 * 60 * 1000) {
+            return cached;
         }
 
-        // 1. ローカルVOICEVOX
-        const localUrl = await this.fetchLocalVoicevoxUrl(chunkText, speaker, reqId);
-        if (localUrl) {
-            return { url: localUrl, revoke: true, applyRate: false };
+        // 2. すでに裏で同じ音声を合成中なら、そのPromiseに相乗りする（二重リクエスト防止）
+        const inflight = this.inflightRequests.get(cacheKey);
+        if (inflight) {
+            return inflight;
         }
-        if (reqId !== this.activeRequestId) return null;
 
-        // 2. Web版 VOICEVOX (tts.quest)
-        const webUrl = await this.fetchWebVoicevoxUrl(chunkText, speaker, reqId);
-        if (webUrl) {
-            this.audioUrlCache.set(cacheKey, webUrl);
-            return { url: webUrl, revoke: false, applyRate: true };
-        }
-        return null;
+        // 3. 新規に合成を開始
+        const promise = (async (): Promise<CachedAudioItem | null> => {
+            try {
+                // ローカルVOICEVOX試行
+                const localUrl = await this.fetchLocalVoicevoxUrl(chunkText, speaker);
+                if (localUrl) {
+                    const item: CachedAudioItem = { url: localUrl, applyRate: false, createdAt: Date.now() };
+                    this.audioCache.set(cacheKey, item);
+                    return item;
+                }
+
+                // Web版 VOICEVOX (tts.quest)
+                const webUrl = await this.fetchWebVoicevoxUrl(chunkText, speaker);
+                if (webUrl) {
+                    const item: CachedAudioItem = { url: webUrl, applyRate: true, createdAt: Date.now() };
+                    this.audioCache.set(cacheKey, item);
+                    return item;
+                }
+                return null;
+            } finally {
+                this.inflightRequests.delete(cacheKey);
+            }
+        })();
+
+        this.inflightRequests.set(cacheKey, promise);
+        return promise;
     }
 
-    private async fetchLocalVoicevoxUrl(text: string, speaker: number, reqId: number): Promise<string | null> {
+    private async fetchLocalVoicevoxUrl(text: string, speaker: number): Promise<string | null> {
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 700);
@@ -346,7 +380,7 @@ export class VoiceManager {
                 { method: 'POST', signal: controller.signal }
             );
             clearTimeout(timeout);
-            if (!queryRes.ok || reqId !== this.activeRequestId) return null;
+            if (!queryRes.ok) return null;
 
             const queryJson = await queryRes.json();
             queryJson.speedScale = this.settings.speedScale;
@@ -359,7 +393,7 @@ export class VoiceManager {
                     body: JSON.stringify(queryJson)
                 }
             );
-            if (!synthRes.ok || reqId !== this.activeRequestId) return null;
+            if (!synthRes.ok) return null;
 
             const blob = await synthRes.blob();
             return URL.createObjectURL(blob);
@@ -368,34 +402,33 @@ export class VoiceManager {
         }
     }
 
-    private async fetchWebVoicevoxUrl(text: string, speaker: number, reqId: number): Promise<string | null> {
+    private async fetchWebVoicevoxUrl(text: string, speaker: number): Promise<string | null> {
         try {
-            // レート制限(retryAfter)が返ってきた場合はしっかり待機して最大5回までリトライする
-            for (let attempt = 0; attempt < 5; attempt++) {
-                if (reqId !== this.activeRequestId) return null;
+            for (let attempt = 0; attempt < 4; attempt++) {
                 const res = await fetch(
                     `https://api.tts.quest/v3/voicevox/synthesis?text=${encodeURIComponent(text)}&speaker=${speaker}`
                 );
                 if (!res.ok) {
-                    await new Promise(r => setTimeout(r, 1500));
+                    await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }
                 const data = await res.json();
 
+                // レート制限 (retryAfter) が返ってきた場合は、指定された秒数しっかり待ってからリトライする
                 if (data?.retryAfter && typeof data.retryAfter === 'number') {
-                    const waitMs = Math.min(8000, (data.retryAfter + 1) * 1000);
+                    const waitMs = Math.min(25000, (data.retryAfter + 1) * 1000);
                     await new Promise(r => setTimeout(r, waitMs));
                     continue;
                 }
 
                 if (!data || !data.mp3StreamingUrl) {
-                    await new Promise(r => setTimeout(r, 1500));
+                    await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }
 
                 if (data.audioStatusUrl) {
-                    for (let i = 0; i < 25; i++) {
-                        if (reqId !== this.activeRequestId) return null;
+                    let hasError = false;
+                    for (let i = 0; i < 35; i++) {
                         try {
                             const statusRes = await fetch(data.audioStatusUrl);
                             if (statusRes.ok) {
@@ -404,17 +437,21 @@ export class VoiceManager {
                                     break;
                                 }
                                 if (statusData.isAudioError) {
-                                    return null;
+                                    hasError = true;
+                                    break;
                                 }
                             }
                         } catch { /* ignore */ }
                         await new Promise(r => setTimeout(r, 500));
                     }
+                    if (hasError) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        continue;
+                    }
                 } else {
                     await new Promise(r => setTimeout(r, 1500));
                 }
 
-                // 完成済みの mp3DownloadUrl を優先する
                 return data.mp3DownloadUrl || data.mp3StreamingUrl;
             }
             return null;
@@ -425,36 +462,36 @@ export class VoiceManager {
 
     private playAudioUrl(
         url: string,
-        revokeOnEnd: boolean,
         applyPlaybackRate: boolean = true,
         reqId: number
-    ): Promise<void> {
+    ): Promise<boolean> {
         return new Promise((resolve) => {
             if (reqId !== this.activeRequestId) {
-                if (revokeOnEnd) URL.revokeObjectURL(url);
-                resolve();
+                resolve(true);
                 return;
             }
 
             const audio = this.sharedAudio || new Audio();
             this.sharedAudio = audio;
 
-            const cleanup = () => {
+            let settled = false;
+            const finish = (ok: boolean) => {
+                if (settled) return;
+                settled = true;
                 audio.onended = null;
                 audio.onerror = null;
-                if (revokeOnEnd) URL.revokeObjectURL(url);
-                resolve();
+                resolve(ok);
             };
 
-            audio.onended = cleanup;
-            audio.onerror = cleanup;
+            audio.onended = () => finish(true);
+            audio.onerror = () => finish(false);
             audio.src = url;
             audio.preservesPitch = true;
             audio.playbackRate = applyPlaybackRate ? this.settings.speedScale : 1.0;
 
             const playPromise = audio.play();
             if (playPromise && typeof playPromise.catch === 'function') {
-                playPromise.catch(cleanup);
+                playPromise.catch(() => finish(false));
             }
         });
     }

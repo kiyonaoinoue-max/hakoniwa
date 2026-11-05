@@ -84,16 +84,26 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
         voiceManager.setOnStatusChange((status) => {
             setVoiceStatus(status);
         });
+        // 画面を開いた時点で最新のAIメッセージ1件を裏で事前合成（プリロード）しておく
+        const lastAi = [...brainState.episodes].reverse().find(ep => ep.speaker === 'ai');
+        if (lastAi) {
+            voiceManager.preloadMessage(lastAi.content);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // 新しいAIメッセージが追加されたら（自動トリガー含む）、音声ONなら自動でVOICEVOX読み上げ
+    // 新しいAIメッセージが追加されたら（自動トリガー含む）、音声ONなら自動読み上げ、OFFでも裏で事前合成しておく
     useEffect(() => {
         if (brainState.episodes.length === 0) return;
         const lastEp = brainState.episodes[brainState.episodes.length - 1];
         if (lastEp.id !== lastSpokenEpisodeIdRef.current) {
             lastSpokenEpisodeIdRef.current = lastEp.id;
-            if (lastEp.speaker === 'ai' && voiceManager.getSettings().enabled) {
-                voiceManager.speak(lastEp.content, false, undefined, lastEp.id);
+            if (lastEp.speaker === 'ai') {
+                if (voiceManager.getSettings().enabled) {
+                    voiceManager.speak(lastEp.content, false, undefined, lastEp.id);
+                } else {
+                    voiceManager.preloadMessage(lastEp.content);
+                }
             }
         }
     }, [brainState.episodes]);
