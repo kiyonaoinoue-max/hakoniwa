@@ -214,7 +214,9 @@ export class Brain {
                 // ユーザーが「自由研究」「何か面白いこと調べて」「〇〇を調べて」と今すぐリクエストした場合、事前にWikipedia APIからリアルデータを取得＆Google検索グラウンディングも有効化
                 let liveResearchContext = '';
                 const isWeekendReservation = /(?:今週末|来週末|週末|土曜|日曜).*?(?:調べて|発表して|自由研究)/.test(input);
-                const immediateSearchMatch = !isWeekendReservation && input.match(/(?:「(.+?)」|(.+?))?(?:について|の)?(?:自由研究|調べて|深掘りして|検索して)/);
+                const immediateSearchMatch: RegExpMatchArray | null = isWeekendReservation
+                    ? null
+                    : input.match(/(?:「(.+?)」|(.+?))?(?:について|の)?(?:自由研究|調べて|深掘りして|検索して)/);
                 const wantsImmediateResearch = Boolean(immediateSearchMatch || (!isWeekendReservation && input.includes('自由研究')));
 
                 if (wantsImmediateResearch) {
