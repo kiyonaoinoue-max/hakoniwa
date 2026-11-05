@@ -123,12 +123,23 @@ export class VoiceManager {
     }
 
     /**
-     * 読み上げ用にテキストからURLや余計な記号・絵文字を整理する（文字数制限なしで全文対応）
+     * 読み上げ用にテキストからURLや余計な記号・絵文字を整理し、
+     * VOICEVOXが苦手とするローマ字・英単語（Hakoniwa, Nao等）を自然なカタカナ読みに変換する
      */
     private cleanTextForSpeech(text: string): string {
         return text
             .replace(/https?:\/\/[^\s]+/g, '')
             .replace(/🔗\s*出典:?/g, '')
+            // VOICEVOXのイントネーション崩壊を防ぐため頻出英単語をカタカナ化
+            .replace(/Hakoniwa/gi, 'ハコニワ')
+            .replace(/Nao/gi, 'ナオ')
+            .replace(/AI/g, 'エーアイ')
+            .replace(/API/gi, 'エーピーアイ')
+            .replace(/Web/gi, 'ウェブ')
+            .replace(/Wikipedia/gi, 'ウィキペディア')
+            .replace(/VOICEVOX/gi, 'ボイスボックス')
+            .replace(/Google/gi, 'グーグル')
+            .replace(/「|」|『|』/g, '、') // カギカッコでイントネーションが跳ねるのを防ぐ
             .replace(/[★☆]{2,}/g, (m) => `星${(m.match(/★/g) || []).length}つ。`)
             .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
             .trim();
@@ -303,28 +314,29 @@ export class VoiceManager {
                     continue;
                 }
 
-                if (data.audioStatusUrl) {
-                    for (let i = 0; i < 20; i++) {
-                        if (reqId !== this.activeRequestId) return null;
-                        try {
-                            const statusRes = await fetch(data.audioStatusUrl);
-                            if (statusRes.ok) {
-                                const statusData = await statusRes.json();
-                                if (statusData.isAudioReady) {
-                                    break;
-                                }
-                                if (statusData.isAudioError) {
-                                    return null;
-                                }
+            if (data.audioStatusUrl) {
+                for (let i = 0; i < 25; i++) {
+                    if (reqId !== this.activeRequestId) return null;
+                    try {
+                        const statusRes = await fetch(data.audioStatusUrl);
+                        if (statusRes.ok) {
+                            const statusData = await statusRes.json();
+                            if (statusData.isAudioReady) {
+                                break;
                             }
-                        } catch { /* ignore */ }
-                        await new Promise(r => setTimeout(r, 450));
-                    }
-                } else {
-                    await new Promise(r => setTimeout(r, 1000));
+                            if (statusData.isAudioError) {
+                                return null;
+                            }
+                        }
+                    } catch { /* ignore */ }
+                    await new Promise(r => setTimeout(r, 500));
                 }
+            } else {
+                await new Promise(r => setTimeout(r, 1500));
+            }
 
-                return data.mp3DownloadUrl || data.mp3StreamingUrl;
+            // StreamingUrlは合成途中のチャンクで声が歪むことがあるため、完成済みの mp3DownloadUrl を優先する
+            return data.mp3DownloadUrl || data.mp3StreamingUrl;
             }
             return null;
         } catch {
@@ -335,6 +347,7 @@ export class VoiceManager {
     private playAudioUrl(url: string, revokeOnEnd: boolean, applyPlaybackRate: boolean = true): Promise<void> {
         return new Promise((resolve) => {
             const audio = new Audio(url);
+            audio.preservesPitch = true;
             if (applyPlaybackRate) {
                 audio.playbackRate = this.settings.speedScale;
             }
