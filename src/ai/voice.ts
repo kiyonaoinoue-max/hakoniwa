@@ -1,5 +1,16 @@
 // VOICEVOX (ローカルエンジン + Web API + キャラクター別トーン調整TTSフォールバック) & Web Speech API 音声認識マネージャー
 
+export interface VoiceSpeedOption {
+    label: string;
+    value: number;
+}
+
+export const VOICE_SPEED_OPTIONS: VoiceSpeedOption[] = [
+    { label: '🐢 ゆっくり', value: 0.85 },
+    { label: '🚶 ふつう', value: 1.0 },
+    { label: '🐇 はやめ', value: 1.2 },
+];
+
 export interface VoiceSpeakerOption {
     id: number;
     name: string;
@@ -75,6 +86,14 @@ export class VoiceManager {
 
     public setSpeakerId(speakerId: number): void {
         this.settings.speakerId = speakerId;
+        this.saveSettings();
+    }
+
+    public setSpeedScale(speedScale: number): void {
+        this.settings.speedScale = speedScale;
+        if (this.currentAudio) {
+            this.currentAudio.playbackRate = speedScale;
+        }
         this.saveSettings();
     }
 
@@ -172,7 +191,8 @@ export class VoiceManager {
 
             const blob = await synthRes.blob();
             const url = URL.createObjectURL(blob);
-            await this.playAudioUrl(url, true);
+            // ローカルVOICEVOXは queryJson.speedScale で既に速度反映済みなので playbackRate は 1.0 のままにする
+            await this.playAudioUrl(url, true, false);
             return true;
         } catch {
             return false;
@@ -224,9 +244,12 @@ export class VoiceManager {
         }
     }
 
-    private playAudioUrl(url: string, revokeOnEnd: boolean): Promise<void> {
+    private playAudioUrl(url: string, revokeOnEnd: boolean, applyPlaybackRate: boolean = true): Promise<void> {
         return new Promise((resolve, reject) => {
             const audio = new Audio(url);
+            if (applyPlaybackRate) {
+                audio.playbackRate = this.settings.speedScale;
+            }
             this.currentAudio = audio;
 
             audio.onended = () => {
@@ -261,7 +284,7 @@ export class VoiceManager {
         const utter = new SpeechSynthesisUtterance(text);
         utter.lang = 'ja-JP';
         utter.pitch = speakerOption.fallbackPitch;
-        utter.rate = speakerOption.fallbackRate;
+        utter.rate = Math.max(0.5, Math.min(2.0, speakerOption.fallbackRate * this.settings.speedScale));
 
         const voices = window.speechSynthesis.getVoices();
         const jaVoice = voices.find(v => v.lang.includes('ja') && (v.name.includes('Nanami') || v.name.includes('Kyoko') || v.name.includes('Google')));

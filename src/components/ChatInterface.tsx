@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Clock, Cpu, Camera, Mic, MicOff, Volume2, VolumeX, Settings2, X } from 'lucide-react';
 import { Brain } from '../ai/brain';
 import type { BrainState } from '../ai/types';
-import { voiceManager, VOICEVOX_SPEAKERS } from '../ai/voice';
+import { voiceManager, VOICEVOX_SPEAKERS, VOICE_SPEED_OPTIONS } from '../ai/voice';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 
@@ -60,6 +60,7 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
     // 音声読み上げ (VOICEVOX) 状態
     const [voiceEnabled, setVoiceEnabled] = useState(voiceManager.getSettings().enabled);
     const [selectedSpeaker, setSelectedSpeaker] = useState(voiceManager.getSettings().speakerId);
+    const [selectedSpeed, setSelectedSpeed] = useState(voiceManager.getSettings().speedScale);
     const [showVoiceMenu, setShowVoiceMenu] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
 
@@ -106,6 +107,12 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
         setSelectedSpeaker(speakerId);
         voiceManager.setSpeakerId(speakerId);
         voiceManager.speak('こんにちは、ハコです。この声でお話ししますね。', true, speakerId);
+    };
+
+    const handleSpeedChange = (speed: number) => {
+        setSelectedSpeed(speed);
+        voiceManager.setSpeedScale(speed);
+        voiceManager.speak('このくらいの速さでお話ししますね。', true, selectedSpeaker);
     };
 
     // --- 画像選択 & クリップボード貼り付け処理 ---
@@ -278,9 +285,32 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
                         </button>
                     </div>
                     <p className="text-slate-400 text-[11px] mb-3 leading-relaxed">
-                        お好みの声を選ぶと試し聴きができます。スマホや外出先でもVOICEVOXの声でお話しします。
+                        お好みの声と話す速さを選ぶと試し聴きができます。
                     </p>
-                    <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+
+                    {/* 3段階スピード選択 */}
+                    <div className="mb-3">
+                        <div className="text-[11px] text-slate-300 font-medium mb-1.5">⏱️ 話す速さ（3段階）</div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                            {VOICE_SPEED_OPTIONS.map((opt) => (
+                                <button
+                                    key={opt.value}
+                                    type="button"
+                                    onClick={() => handleSpeedChange(opt.value)}
+                                    className={`py-1.5 px-2 rounded-lg border text-center font-medium transition-all ${
+                                        Math.abs(selectedSpeed - opt.value) < 0.05
+                                            ? 'bg-purple-600/30 border-purple-400 text-white shadow-sm'
+                                            : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
+                                    }`}
+                                >
+                                    {opt.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="text-[11px] text-slate-300 font-medium mb-1.5">🎤 声のキャラクター</div>
+                    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
                         {VOICEVOX_SPEAKERS.map((sp) => (
                             <button
                                 key={sp.id}
