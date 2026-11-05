@@ -264,9 +264,9 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
                 </div>
             </div>
 
-            {/* VOICEVOX Voice Settings Popover */}
+            {/* VOICEVOX Voice Settings Popover (下部入力バーの上に表示) */}
             {showVoiceMenu && (
-                <div className="absolute right-4 top-14 z-30 w-80 bg-slate-900/95 backdrop-blur-xl border border-white/15 rounded-xl p-4 shadow-2xl text-xs">
+                <div className="absolute left-4 bottom-20 z-30 w-80 bg-slate-900/95 backdrop-blur-xl border border-purple-500/30 rounded-xl p-4 shadow-2xl text-xs">
                     <div className="flex items-center justify-between mb-2">
                         <span className="font-semibold text-white text-sm">🎀 ハコさんの声設定 (VOICEVOX)</span>
                         <button
@@ -327,7 +327,7 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
                             alignItems: ep.speaker === 'user' ? 'flex-end' : 'flex-start',
                         }}
                     >
-                        <div className="flex items-center gap-1.5 mb-1 px-2">
+                        <div className="flex items-center gap-2 mb-1 px-2">
                             <span style={{
                                 fontSize: '10px',
                                 opacity: 0.5,
@@ -340,10 +340,11 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
                                 <button
                                     type="button"
                                     onClick={() => voiceManager.speak(ep.content, true)}
-                                    title="このメッセージを声で聴く"
-                                    className="opacity-40 hover:opacity-100 text-slate-300 transition-opacity"
+                                    title="このメッセージを声で聴く (VOICEVOX)"
+                                    className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/20 hover:bg-purple-500/40 text-purple-200 border border-purple-500/30 text-[10px] transition-all"
                                 >
-                                    <Volume2 size={12} />
+                                    <Volume2 size={11} />
+                                    <span>再生</span>
                                 </button>
                             )}
                         </div>
@@ -460,6 +461,34 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
                         }`}
                     >
                         {isListening ? <MicOff size={18} /> : <Mic size={18} />}
+                    </button>
+
+                    {/* Speaker ON/OFF Toggle Button (下部バーに常時表示) */}
+                    <button
+                        type="button"
+                        onClick={toggleVoiceEnabled}
+                        title={voiceEnabled ? '自動読み上げ ON (クリックでOFF)' : '自動読み上げ OFF (クリックでON)'}
+                        className={`p-3 rounded-xl border transition-all shrink-0 ${
+                            voiceEnabled
+                                ? 'bg-purple-600/30 border-purple-400 text-purple-200 shadow-sm'
+                                : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10 hover:text-white'
+                        }`}
+                    >
+                        {voiceEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                    </button>
+
+                    {/* VOICEVOX Character Settings Button (下部バーに常時表示) */}
+                    <button
+                        type="button"
+                        onClick={() => setShowVoiceMenu(!showVoiceMenu)}
+                        title={`ハコさんの声を選ぶ（現在: ${currentSpeakerObj.name}）`}
+                        className={`p-3 rounded-xl border transition-all shrink-0 ${
+                            showVoiceMenu
+                                ? 'bg-purple-600/30 border-purple-400 text-purple-200'
+                                : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:text-white'
+                        }`}
+                    >
+                        <Settings2 size={18} />
                     </button>
 
                     <div className="relative flex-1 flex items-center">
