@@ -56,6 +56,11 @@ function App() {
                 setTimeout(async () => {
                   const recMessage = await brain.checkRecommendationTrigger();
                   if (recMessage && isMounted) setBrainState({ ...brain.getMemoryState() });
+
+                  setTimeout(async () => {
+                    const researchMessage = await brain.checkWeekendResearchTrigger();
+                    if (researchMessage && isMounted) setBrainState({ ...brain.getMemoryState() });
+                  }, 15000);
                 }, 15000);
               }, 15000);
             }, 15000);
@@ -68,10 +73,35 @@ function App() {
             if (reminderMsg) setBrainState({ ...brain.getMemoryState() });
           }, 30000);
 
+          // Poll time-based triggers (11:30 lunch suggestion, 12:00 lunch ask, 7:00 fortune, 17:00 recommendation, weekend research) every 60 seconds
+          const triggerInterval = setInterval(async () => {
+            if (!isMounted) return;
+            const mealMsg = await brain.checkMealTrigger();
+            if (mealMsg && isMounted) {
+              setBrainState({ ...brain.getMemoryState() });
+              return;
+            }
+            const fortuneMsg = await brain.checkFortuneTrigger();
+            if (fortuneMsg && isMounted) {
+              setBrainState({ ...brain.getMemoryState() });
+              return;
+            }
+            const recMsg = await brain.checkRecommendationTrigger();
+            if (recMsg && isMounted) {
+              setBrainState({ ...brain.getMemoryState() });
+              return;
+            }
+            const researchMsg = await brain.checkWeekendResearchTrigger();
+            if (researchMsg && isMounted) {
+              setBrainState({ ...brain.getMemoryState() });
+            }
+          }, 60000);
+
           // Cleanup interval on unmount
           return () => {
             isMounted = false;
             clearInterval(reminderInterval);
+            clearInterval(triggerInterval);
           };
         }
       };

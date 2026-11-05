@@ -1,6 +1,23 @@
-import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector, InteractionMode, ReminderEntry } from './types';
+import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector, InteractionMode, ReminderEntry, SelfCorrectionAction, ResearchNote, ResearchTriggerState } from './types';
 
 const STORAGE_KEY = 'hakoniwa_ai_memory_v1';
+
+// 日本時間 (Asia/Tokyo) で YYYY-MM-DD を取得するヘルパー
+export function getJSTDateString(date: Date = new Date()): string {
+    return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Tokyo' });
+}
+
+// 日本時間 (Asia/Tokyo) の時・分・曜日を取得するヘルパー
+export function getJSTTimeParts(date: Date = new Date()): { hour: number; minute: number; dayOfWeek: number; formatted: string } {
+    const jstString = date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+    const jstDate = new Date(jstString);
+    return {
+        hour: jstDate.getHours(),
+        minute: jstDate.getMinutes(),
+        dayOfWeek: jstDate.getDay(),
+        formatted: date.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })
+    };
+}
 
 const INITIAL_STATE: BrainState = {
     episodes: [],
@@ -13,14 +30,28 @@ const INITIAL_STATE: BrainState = {
     mealTrigger: {
         lastAskedDate: '',
         lastSuggestedDate: '',
-        awaitingMealResponse: false
+        awaitingMealResponse: false,
+        customAskHour: 12,
+        disabled: false
     },
     fortuneTrigger: {
-        lastFortuneDate: ''
+        lastFortuneDate: '',
+        customHour: 7,
+        disabled: false
     },
     recommendations: [],
     recommendationTrigger: {
-        lastRecommendationDate: ''
+        lastRecommendationDate: '',
+        customHour: 17,
+        disabled: false
+    },
+    researchNotes: [],
+    researchTrigger: {
+        lastResearchDate: '',
+        disabled: false,
+        queuedTopic: '金相場の年末年始の動向',
+        preferredDay: 'sun',
+        preferredHour: 19
     },
     personality: {
         humor: 0.3,
@@ -134,6 +165,11 @@ export class MemoryManager {
             recommendationTrigger: {
                 ...INITIAL_STATE.recommendationTrigger,
                 ...(parsed.recommendationTrigger || {})
+            },
+            researchNotes: Array.isArray(parsed.researchNotes) ? parsed.researchNotes : [],
+            researchTrigger: {
+                ...INITIAL_STATE.researchTrigger,
+                ...(parsed.researchTrigger || {})
             },
             personality: {
                 ...INITIAL_STATE.personality,
@@ -278,10 +314,11 @@ export class MemoryManager {
     // --- Activity Tracking ---
     public logSessionActivity(): void {
         const now = new Date();
+        const jst = getJSTTimeParts(now);
         const entry: ActivityLogEntry = {
-            date: now.toISOString().split('T')[0],
-            hour: now.getHours(),
-            dayOfWeek: now.getDay()
+            date: getJSTDateString(now),
+            hour: jst.hour,
+            dayOfWeek: jst.dayOfWeek
         };
 
         // Avoid duplicate entries for same hour
@@ -385,7 +422,7 @@ export class MemoryManager {
         const now = new Date();
         const entry: MealLogEntry = {
             id: crypto.randomUUID(),
-            date: now.toISOString().split('T')[0],
+            date: getJSTDateString(now),
             mealType,
             menu,
             timestamp: now.getTime()
@@ -681,6 +718,234 @@ ${trust >= 50 ? '- 信頼残高が十分なので、必要なら厳しいフィ�
         }).join('\n');
 
         return `\n登録済みリマインド (${active.length}件):\n${list}`;
+    }
+
+    // --- Self-Correction (シンプルな設定値の上書き＆データの掃除のみ・ルールの蓄積なし) ---
+    public applySelfCorrection(action: SelfCorrectionAction): void {
+        const today = getJSTDateString();
+        let changed = false;
+
+        if (action.skipMealToday) {
+            this.state.mealTrigger.awaitingMealResponse = false;
+            this.state.mealTrigger.lastAskedDate = today;
+            console.log('Self-correction: Skipped meal question for today and cleared waiting flag.');
+            changed = true;
+        }
+
+        if (typeof action.mealAskHour === 'number' && action.mealAskHour >= 0 && action.mealAskHour <= 23) {
+            this.state.mealTrigger.customAskHour = action.mealAskHour;
+            console.log(`Self-correction: Changed meal ask hour to ${action.mealAskHour}:00.`);
+            changed = true;
+        }
+
+        if (typeof action.disableMealTrigger === 'boolean') {
+            this.state.mealTrigger.disabled = action.disableMealTrigger;
+            if (action.disableMealTrigger) {
+                this.state.mealTrigger.awaitingMealResponse = false;
+            }
+            console.log(`Self-correction: Meal trigger disabled = ${action.disableMealTrigger}`);
+            changed = true;
+        }
+
+        if (typeof action.fortuneHour === 'number' && action.fortuneHour >= 0 && action.fortuneHour <= 23) {
+            this.state.fortuneTrigger.customHour = action.fortuneHour;
+            console.log(`Self-correction: Changed fortune hour to ${action.fortuneHour}:00.`);
+            changed = true;
+        }
+
+        if (typeof action.disableFortuneTrigger === 'boolean') {
+            this.state.fortuneTrigger.disabled = action.disableFortuneTrigger;
+            console.log(`Self-correction: Fortune trigger disabled = ${action.disableFortuneTrigger}`);
+            changed = true;
+        }
+
+        if (typeof action.recommendationHour === 'number' && action.recommendationHour >= 0 && action.recommendationHour <= 23) {
+            this.state.recommendationTrigger.customHour = action.recommendationHour;
+            console.log(`Self-correction: Changed recommendation hour to ${action.recommendationHour}:00.`);
+            changed = true;
+        }
+
+        if (typeof action.disableRecommendationTrigger === 'boolean') {
+            this.state.recommendationTrigger.disabled = action.disableRecommendationTrigger;
+            console.log(`Self-correction: Recommendation trigger disabled = ${action.disableRecommendationTrigger}`);
+            changed = true;
+        }
+
+        if (typeof action.disableResearchTrigger === 'boolean') {
+            if (!this.state.researchTrigger) {
+                this.state.researchTrigger = { lastResearchDate: '', disabled: false };
+            }
+            this.state.researchTrigger.disabled = action.disableResearchTrigger;
+            console.log(`Self-correction: Research trigger disabled = ${action.disableResearchTrigger}`);
+            changed = true;
+        }
+
+        if (action.queueResearchTopic && typeof action.queueResearchTopic === 'string') {
+            if (!this.state.researchTrigger) {
+                this.state.researchTrigger = { lastResearchDate: '', disabled: false };
+            }
+            this.state.researchTrigger.queuedTopic = action.queueResearchTopic.trim();
+            console.log(`Self-correction: Queued research topic "${this.state.researchTrigger.queuedTopic}"`);
+            changed = true;
+        }
+
+        if (action.researchDay === 'sat' || action.researchDay === 'sun' || action.researchDay === 'both') {
+            if (!this.state.researchTrigger) {
+                this.state.researchTrigger = { lastResearchDate: '', disabled: false };
+            }
+            this.state.researchTrigger.preferredDay = action.researchDay;
+            console.log(`Self-correction: Set research preferred day = ${action.researchDay}`);
+            changed = true;
+        }
+
+        if (typeof action.researchHour === 'number' && action.researchHour >= 0 && action.researchHour <= 23) {
+            if (!this.state.researchTrigger) {
+                this.state.researchTrigger = { lastResearchDate: '', disabled: false };
+            }
+            this.state.researchTrigger.preferredHour = action.researchHour;
+            console.log(`Self-correction: Set research preferred hour = ${action.researchHour}:00`);
+            changed = true;
+        }
+
+        if (action.deleteConceptTerm && typeof action.deleteConceptTerm === 'string') {
+            const key = action.deleteConceptTerm.toLowerCase().trim();
+            if (key in this.state.semantics) {
+                delete this.state.semantics[key];
+                console.log(`Self-correction: Deleted concept "${key}"`);
+                changed = true;
+            } else {
+                // 部分一致でも探す
+                const foundKey = Object.keys(this.state.semantics).find(k => k.includes(key) || this.state.semantics[k].term.includes(action.deleteConceptTerm!));
+                if (foundKey) {
+                    delete this.state.semantics[foundKey];
+                    console.log(`Self-correction: Deleted concept "${foundKey}"`);
+                    changed = true;
+                }
+            }
+        }
+
+        if (action.cancelReminderKeyword && typeof action.cancelReminderKeyword === 'string') {
+            const kw = action.cancelReminderKeyword.toLowerCase().trim();
+            this.state.reminders.forEach(r => {
+                if (!r.done && r.content.toLowerCase().includes(kw)) {
+                    r.done = true;
+                    console.log(`Self-correction: Cancelled reminder "${r.content}"`);
+                    changed = true;
+                }
+            });
+        }
+
+        if (changed) {
+            this.save();
+        }
+    }
+
+    public getTriggerStatusForPrompt(): string {
+        const mt = this.state.mealTrigger;
+        const ft = this.state.fortuneTrigger;
+        const rt = this.state.recommendationTrigger;
+        const resT = this.state.researchTrigger || { lastResearchDate: '', disabled: false };
+
+        const askHour = mt.customAskHour ?? 12;
+        const fortuneHour = ft.customHour ?? 7;
+        const recHour = rt.customHour ?? 17;
+        const askedToday = mt.lastAskedDate === getJSTDateString();
+        const resDayLabel = resT.preferredDay === 'sun' ? '日曜' : resT.preferredDay === 'sat' ? '土曜' : '土日';
+        const resHour = resT.preferredHour ?? 10;
+        const queuedInfo = resT.queuedTopic ? ` [次回予約テーマ:「${resT.queuedTopic}」]` : '';
+
+        return `\n--- 自動トリガー現在設定 ---
+- 🔮 朝の占い: ${ft.disabled ? 'OFF(停止中)' : `ON (毎日${fortuneHour}:00〜${fortuneHour + 2}:00)`}
+- 🍱 昼食メニュー提案: ${mt.disabled ? 'OFF(停止中)' : 'ON (毎日11:30〜12:00)'}
+- 🍽️ 昼食の質問: ${mt.disabled ? 'OFF(停止中)' : `ON (毎日${askHour}:00〜${askHour + 1}:00)`} [本日の質問済み: ${askedToday ? 'はい' : 'いいえ'}, 返事待ち: ${mt.awaitingMealResponse ? 'はい' : 'いいえ'}]
+- 🎯 夕方のおすすめ: ${rt.disabled ? 'OFF(停止中)' : `ON (毎日${recHour}:00〜${recHour + 2}:00)`}
+- 🧪 週末の自由研究: ${resT.disabled ? 'OFF(停止中)' : `ON (${resDayLabel}の${resHour}:00以降に自動発表)`}${queuedInfo}`;
+    }
+
+    // --- Weekend Free Research (自由研究) ---
+    public addResearchNote(note: Omit<ResearchNote, 'id' | 'timestamp'>): void {
+        if (!this.state.researchNotes) {
+            this.state.researchNotes = [];
+        }
+        const entry: ResearchNote = {
+            ...note,
+            id: crypto.randomUUID(),
+            timestamp: Date.now()
+        };
+        this.state.researchNotes.push(entry);
+        if (this.state.researchNotes.length > 30) {
+            this.state.researchNotes = this.state.researchNotes.slice(-30);
+        }
+        this.save();
+    }
+
+    public getRecentResearchNotes(limit: number = 5): ResearchNote[] {
+        return (this.state.researchNotes || []).slice(-limit);
+    }
+
+    public setResearchShown(date: string): void {
+        if (!this.state.researchTrigger) {
+            this.state.researchTrigger = { lastResearchDate: '', disabled: false };
+        }
+        this.state.researchTrigger.lastResearchDate = date;
+        // 予約テーマを発表し終えたらクリアして次回はまた新しいテーマにする
+        if (this.state.researchTrigger.queuedTopic) {
+            this.state.researchTrigger.queuedTopic = undefined;
+        }
+        this.save();
+    }
+
+    public getResearchTriggerState(): ResearchTriggerState {
+        if (!this.state.researchTrigger) {
+            this.state.researchTrigger = { lastResearchDate: '', disabled: false };
+        }
+        return this.state.researchTrigger;
+    }
+
+    /**
+     * 自由研究のタネ（シードキーワード）をユーザーの記憶・食事・会話からランダムに1つ選ぶ
+     * 過去に調査済みのキーワードはなるべく避ける
+     */
+    public pickResearchSeed(): { keyword: string; context: string } | null {
+        const pastSeeds = new Set((this.state.researchNotes || []).slice(-10).map(n => n.seedTopic));
+        const candidates: { keyword: string; context: string }[] = [];
+
+        // 1. 学習した概念 (Semantics) から候補を追加
+        Object.values(this.state.semantics).forEach(sem => {
+            if (!pastSeeds.has(sem.term)) {
+                candidates.push({
+                    keyword: sem.term,
+                    context: `マスターが教えてくれた概念「${sem.term}（${sem.definition}）」`
+                });
+            }
+        });
+
+        // 2. よく食べるメニューから候補を追加
+        const meals = this.state.mealLog;
+        if (meals.length > 0) {
+            const recentMeal = meals[meals.length - 1];
+            if (recentMeal && !pastSeeds.has(recentMeal.menu)) {
+                candidates.push({
+                    keyword: recentMeal.menu,
+                    context: `マスターが最近食べた「${recentMeal.menu}」`
+                });
+            }
+        }
+
+        if (candidates.length === 0) {
+            // すべて調査済みなら全概念からランダムに選ぶ
+            const allTerms = Object.values(this.state.semantics);
+            if (allTerms.length > 0) {
+                const chosen = allTerms[Math.floor(Math.random() * allTerms.length)];
+                return {
+                    keyword: chosen.term,
+                    context: `マスターが教えてくれた概念「${chosen.term}（${chosen.definition}）」`
+                };
+            }
+            return null;
+        }
+
+        return candidates[Math.floor(Math.random() * candidates.length)];
     }
 }
 

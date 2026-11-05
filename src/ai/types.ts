@@ -48,10 +48,30 @@ export interface MealTriggerState {
   lastAskedDate: string;    // 最後に食事を聞いた日付 (YYYY-MM-DD)
   lastSuggestedDate: string; // 最後に提案をした日付 (YYYY-MM-DD)
   awaitingMealResponse: boolean; // 食事の質問への回答を待っている状態
+  customAskHour?: number;    // ユーザー指定の昼食質問時間 (デフォルト12)
+  disabled?: boolean;        // 食事トリガーの一時停止フラグ
 }
 
 export interface FortuneTriggerState {
   lastFortuneDate: string;  // 最後に占いを出した日付 (YYYY-MM-DD)
+  customHour?: number;      // ユーザー指定の占い開始時間 (デフォルト7)
+  disabled?: boolean;       // 占いトリガーの一時停止フラグ
+}
+
+export interface SelfCorrectionAction {
+  skipMealToday?: boolean;                   // 「今日はもう昼ご飯聞かないで」→ 本日の昼食質問を済みにして返事待ちも解除
+  mealAskHour?: number | null;               // 「昼ご飯は○時に聞いて」→ 聞く時間の変更 (0-23、上書きのみ)
+  disableMealTrigger?: boolean | null;       // 「昼ご飯の質問を止めて/再開して」→ ON/OFF切り替え
+  fortuneHour?: number | null;               // 「占いは○時にして」→ 占い時間の変更 (0-23)
+  disableFortuneTrigger?: boolean | null;    // 「朝の占いを止めて/再開して」→ ON/OFF切り替え
+  recommendationHour?: number | null;        // 「おすすめは○時にして」→ 夕方おすすめ時間の変更 (0-23)
+  disableRecommendationTrigger?: boolean | null; // 「夕方のおすすめを止めて/再開して」→ ON/OFF切り替え
+  disableResearchTrigger?: boolean | null;   // 「週末の自由研究を止めて/再開して」→ ON/OFF切り替え
+  queueResearchTopic?: string | null;        // 「週末に〇〇について調べて」→ 週末自由研究の宿題テーマを予約
+  researchDay?: 'sat' | 'sun' | 'both' | null; // 「日曜に発表して」→ 自由研究の発表曜日指定 ('sat'=土曜, 'sun'=日曜, 'both'=土日)
+  researchHour?: number | null;              // 「日曜の夜(19時)に発表して」→ 自由研究の発表開始時間 (0-23)
+  deleteConceptTerm?: string | null;         // 「〇〇の記憶は消して/間違ってる」→ 誤学習した概念(Memory)の削除
+  cancelReminderKeyword?: string | null;     // 「〇〇のリマインドは消して/キャンセルして」→ リマインド削除
 }
 
 export interface Recommendation {
@@ -66,6 +86,26 @@ export interface Recommendation {
 
 export interface RecommendationTriggerState {
   lastRecommendationDate: string; // 最後におすすめを出した日付 (YYYY-MM-DD)
+  customHour?: number;            // ユーザー指定のおすすめ開始時間 (デフォルト17)
+  disabled?: boolean;             // おすすめトリガーの一時停止フラグ
+}
+
+export interface ResearchNote {
+  id: string;
+  date: string;               // YYYY-MM-DD
+  seedTopic: string;          // きっかけになったユーザーの記憶・言葉（またはランダム）
+  wikiTitle: string;          // 調査したWikipedia記事タイトル / Webトピック
+  wikiUrl?: string;           // 参照URL
+  summary: string;            // ハコさんの自由研究レポート本文
+  timestamp: number;
+}
+
+export interface ResearchTriggerState {
+  lastResearchDate: string;   // 最後に週末自由研究を発表した日付 (YYYY-MM-DD)
+  disabled?: boolean;         // 自由研究トリガーの一時停止フラグ
+  queuedTopic?: string;       // ユーザーから予約された宿題テーマ（例：「金相場の年末年始の動向」）
+  preferredDay?: 'sat' | 'sun' | 'both'; // 発表する曜日 ('sat'=土曜, 'sun'=日曜, 'both'=土日どちらでも)
+  preferredHour?: number;     // 発表する開始時刻 (デフォルト10、夜指定なら19など)
 }
 
 export interface CuriosityTriggerState {
@@ -114,6 +154,8 @@ export interface BrainState {
   fortuneTrigger: FortuneTriggerState;
   recommendations: Recommendation[];
   recommendationTrigger: RecommendationTriggerState;
+  researchNotes?: ResearchNote[];
+  researchTrigger?: ResearchTriggerState;
   curiosityTrigger?: CuriosityTriggerState;
   personality: PersonalityVector;
   modeState: ModeState;
