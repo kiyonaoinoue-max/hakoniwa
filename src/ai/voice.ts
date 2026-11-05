@@ -1,20 +1,22 @@
-// VOICEVOX (ローカルエンジン + Web API + ブラウザTTSフォールバック) & Web Speech API 音声認識マネージャー
+// VOICEVOX (ローカルエンジン + Web API + キャラクター別トーン調整TTSフォールバック) & Web Speech API 音声認識マネージャー
 
 export interface VoiceSpeakerOption {
     id: number;
     name: string;
     description: string;
+    fallbackPitch: number;
+    fallbackRate: number;
 }
 
 export const VOICEVOX_SPEAKERS: VoiceSpeakerOption[] = [
-    { id: 47, name: 'ナースロボ＿タイプＴ (ノーマル)', description: '落ち着いて控えめ・優しいAIボイス（ハコさん推奨！）' },
-    { id: 48, name: 'ナースロボ＿タイプＴ (楽々)', description: '少し明るく親しみやすいAIボイス' },
-    { id: 14, name: '冥鳴ひまり (ノーマル)', description: '柔らかくて上品・聞き心地の良い声' },
-    { id: 61, name: '中国うさぎ (ノーマル)', description: 'おっとり控えめで可愛らしい声' },
-    { id: 2,  name: '四国めたん (ノーマル)', description: 'ハキハキして清楚な声' },
-    { id: 10, name: '雨晴はう (ノーマル)', description: '素直で優しい声' },
-    { id: 8,  name: '春日部つむぎ (ノーマル)', description: '元気でフレンドリーな声' },
-    { id: 3,  name: 'ずんだもん (ノーマル)', description: 'マスコットらしい可愛い声' },
+    { id: 47, name: 'ナースロボ＿タイプＴ (ノーマル)', description: '落ち着いて控えめ・優しいAIボイス（ハコさん推奨！）', fallbackPitch: 1.05, fallbackRate: 0.95 },
+    { id: 48, name: 'ナースロボ＿タイプＴ (楽々)', description: '少し明るく親しみやすいAIボイス', fallbackPitch: 1.18, fallbackRate: 1.02 },
+    { id: 14, name: '冥鳴ひまり (ノーマル)', description: '柔らかくて上品・聞き心地の良い声', fallbackPitch: 0.92, fallbackRate: 0.98 },
+    { id: 61, name: '中国うさぎ (ノーマル)', description: 'おっとり控えめで可愛らしい声', fallbackPitch: 1.25, fallbackRate: 0.88 },
+    { id: 2,  name: '四国めたん (ノーマル)', description: 'ハキハキして清楚な声', fallbackPitch: 1.15, fallbackRate: 1.08 },
+    { id: 10, name: '雨晴はう (ノーマル)', description: '素直で優しい声', fallbackPitch: 1.32, fallbackRate: 1.0 },
+    { id: 8,  name: '春日部つむぎ (ノーマル)', description: '元気でフレンドリーな声', fallbackPitch: 1.28, fallbackRate: 1.12 },
+    { id: 3,  name: 'ずんだもん (ノーマル)', description: 'マスコットらしい可愛い声', fallbackPitch: 1.45, fallbackRate: 1.10 },
 ];
 
 interface VoiceSettings {
@@ -29,6 +31,7 @@ export class VoiceManager {
     private settings: VoiceSettings;
     private currentAudio: HTMLAudioElement | null = null;
     private isSpeakingState = false;
+    private activeRequestId = 0;
     private onStateChange?: (speaking: boolean) => void;
 
     constructor() {
@@ -48,8 +51,8 @@ export class VoiceManager {
             }
         } catch { /* ignore */ }
         return {
-            enabled: false, // デフォルトはOFF（ユーザーがスピーカーボタンでONにできる）
-            speakerId: 47,  // ナースロボ＿タイプＴ (控えめで優しい声)
+            enabled: false,
+            speakerId: 47, // ナースロボ＿タイプＴ
             speedScale: 1.0,
         };
     }
@@ -89,6 +92,7 @@ export class VoiceManager {
     }
 
     public stop(): void {
+        this.activeRequestId++;
         if (this.currentAudio) {
             this.currentAudio.pause();
             this.currentAudio = null;
@@ -104,53 +108,54 @@ export class VoiceManager {
      */
     private cleanTextForSpeech(text: string): string {
         return text
-            .replace(/https?:\/\/[^\s]+/g, '') // URL除去
+            .replace(/https?:\/\/[^\s]+/g, '')
             .replace(/🔗\s*出典:?/g, '')
             .replace(/[★☆]{2,}/g, (m) => `星${(m.match(/★/g) || []).length}つ。`)
-            .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '') // 絵文字除去
+            .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
             .replace(/\s+/g, ' ')
             .trim()
-            .slice(0, 280); // 長すぎる場合は最初の280文字まで
+            .slice(0, 220); // Web合成のレスポンスを速くするため最大220文字に制限
     }
 
     /**
      * ハコさんの返答をVOICEVOXで読み上げる
-     * force=true の場合は設定がOFFでもテスト再生する
+     * overrideSpeakerId が指定されていれば確実にその声IDで合成する
      */
-    public async speak(rawText: string, force: boolean = false): Promise<void> {
+    public async speak(rawText: string, force: boolean = false, overrideSpeakerId?: number): Promise<void> {
         if (!this.settings.enabled && !force) return;
 
         const text = this.cleanTextForSpeech(rawText);
         if (!text) return;
 
         this.stop();
+        const reqId = this.activeRequestId;
         this.setSpeaking(true);
 
-        const speaker = this.settings.speakerId;
+        const speaker = overrideSpeakerId ?? this.settings.speakerId;
 
-        // 1. まずローカルPCの VOICEVOX エンジン (http://127.0.0.1:50021) を試行 (待ち時間ゼロ＆無制限)
-        const playedLocal = await this.tryLocalVoicevox(text, speaker);
-        if (playedLocal) return;
+        // 1. まずローカルPCの VOICEVOX エンジン (http://127.0.0.1:50021) を試行
+        const playedLocal = await this.tryLocalVoicevox(text, speaker, reqId);
+        if (playedLocal || reqId !== this.activeRequestId) return;
 
-        // 2. 次に Web版 VOICEVOX API (tts.quest) を試行 (スマホ・Vercel環境でもVOICEVOXの声が出る！)
-        const playedWeb = await this.tryWebVoicevox(text, speaker);
-        if (playedWeb) return;
+        // 2. 次に Web版 VOICEVOX API (api.tts.quest) を合成完了までポーリングして再生
+        const playedWeb = await this.tryWebVoicevox(text, speaker, reqId);
+        if (playedWeb || reqId !== this.activeRequestId) return;
 
-        // 3. フォールバック：ブラウザ内蔵の音声合成（少し高めの優しいトーンに調整）
-        this.speakWithBrowserTTS(text);
+        // 3. フォールバック：ブラウザ内蔵の音声合成（選んだキャラごとに声の高さ・速度を変化させる）
+        this.speakWithBrowserTTS(text, speaker);
     }
 
-    private async tryLocalVoicevox(text: string, speaker: number): Promise<boolean> {
+    private async tryLocalVoicevox(text: string, speaker: number, reqId: number): Promise<boolean> {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 1200);
+            const timeout = setTimeout(() => controller.abort(), 900);
 
             const queryRes = await fetch(
                 `http://127.0.0.1:50021/audio_query?text=${encodeURIComponent(text)}&speaker=${speaker}`,
                 { method: 'POST', signal: controller.signal }
             );
             clearTimeout(timeout);
-            if (!queryRes.ok) return false;
+            if (!queryRes.ok || reqId !== this.activeRequestId) return false;
 
             const queryJson = await queryRes.json();
             queryJson.speedScale = this.settings.speedScale;
@@ -163,7 +168,7 @@ export class VoiceManager {
                     body: JSON.stringify(queryJson)
                 }
             );
-            if (!synthRes.ok) return false;
+            if (!synthRes.ok || reqId !== this.activeRequestId) return false;
 
             const blob = await synthRes.blob();
             const url = URL.createObjectURL(blob);
@@ -174,17 +179,45 @@ export class VoiceManager {
         }
     }
 
-    private async tryWebVoicevox(text: string, speaker: number): Promise<boolean> {
+    /**
+     * Web版 VOICEVOX API (tts.quest v3)
+     * サーバー側でMP3合成が完了するまで audioStatusUrl をポーリングしてから再生する
+     */
+    private async tryWebVoicevox(text: string, speaker: number, reqId: number): Promise<boolean> {
         try {
             const res = await fetch(
                 `https://api.tts.quest/v3/voicevox/synthesis?text=${encodeURIComponent(text)}&speaker=${speaker}`
             );
-            if (!res.ok) return false;
+            if (!res.ok || reqId !== this.activeRequestId) return false;
             const data = await res.json();
             if (!data || !data.mp3StreamingUrl) return false;
 
-            // 音声生成完了を少し待ってから再生
-            await this.playAudioUrl(data.mp3StreamingUrl, false);
+            // audioStatusUrl がある場合、isAudioReady が true になるまで最大8秒待つ
+            if (data.audioStatusUrl) {
+                for (let i = 0; i < 16; i++) {
+                    if (reqId !== this.activeRequestId) return false;
+                    try {
+                        const statusRes = await fetch(data.audioStatusUrl);
+                        if (statusRes.ok) {
+                            const statusData = await statusRes.json();
+                            if (statusData.isAudioReady) {
+                                break;
+                            }
+                            if (statusData.isAudioError) {
+                                return false;
+                            }
+                        }
+                    } catch { /* ignore */ }
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            } else {
+                await new Promise(r => setTimeout(r, 1200));
+            }
+
+            if (reqId !== this.activeRequestId) return false;
+
+            const playUrl = data.mp3DownloadUrl || data.mp3StreamingUrl;
+            await this.playAudioUrl(playUrl, false);
             return true;
         } catch {
             return false;
@@ -219,15 +252,16 @@ export class VoiceManager {
         });
     }
 
-    private speakWithBrowserTTS(text: string): void {
+    private speakWithBrowserTTS(text: string, speakerId: number): void {
         if (!('speechSynthesis' in window)) {
             this.setSpeaking(false);
             return;
         }
+        const speakerOption = VOICEVOX_SPEAKERS.find(s => s.id === speakerId) || VOICEVOX_SPEAKERS[0];
         const utter = new SpeechSynthesisUtterance(text);
         utter.lang = 'ja-JP';
-        utter.pitch = 1.15; // 少し可愛らしく柔らかい声色に
-        utter.rate = 1.0;
+        utter.pitch = speakerOption.fallbackPitch;
+        utter.rate = speakerOption.fallbackRate;
 
         const voices = window.speechSynthesis.getVoices();
         const jaVoice = voices.find(v => v.lang.includes('ja') && (v.name.includes('Nanami') || v.name.includes('Kyoko') || v.name.includes('Google')));

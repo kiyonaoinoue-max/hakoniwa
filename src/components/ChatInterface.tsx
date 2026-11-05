@@ -105,7 +105,7 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
     const handleSpeakerChange = (speakerId: number) => {
         setSelectedSpeaker(speakerId);
         voiceManager.setSpeakerId(speakerId);
-        voiceManager.speak('こんにちは、ハコです。この声でお話ししますね。', true);
+        voiceManager.speak('こんにちは、ハコです。この声でお話ししますね。', true, speakerId);
     };
 
     // --- 画像選択 & クリップボード貼り付け処理 ---
