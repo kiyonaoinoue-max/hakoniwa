@@ -55,6 +55,7 @@ export class VoiceManager {
     private phase: VoicePlaybackPhase = 'idle';
     private activeId: string | null = null;
     private activeRequestId = 0;
+    private audioUrlCache = new Map<string, string>();
     private onStateChange?: (speaking: boolean) => void;
     private onStatusChange?: (status: VoiceStatusSnapshot) => void;
 
@@ -191,11 +192,12 @@ export class VoiceManager {
     }
 
     /**
-     * なるべく分割せずに1回のVOICEVOXリクエストで合成できるよう、280文字までは1チャンクにまとめる
-     * （分割するとWeb APIの連続リクエスト制限に引っかかりやすいため）
+     * 長文でもボタンを押してすぐ（約1秒）に話し始められるよう、
+     * 「最初の1文（30〜85文字程度）」だけを第1チャンクとして小さく切り出し、
+     * それをしゃべっている裏で残りのチャンクを先読み合成（プリフェッチ）する分割方式
      */
     private splitIntoChunks(cleanedText: string): string[] {
-        if (cleanedText.length <= 280) {
+        if (cleanedText.length <= 85) {
             return [cleanedText];
         }
 
@@ -204,11 +206,18 @@ export class VoiceManager {
             .map(s => s.replace(/\s+/g, ' ').trim())
             .filter(s => s.length > 0);
 
+        if (rawSentences.length <= 1) {
+            return [cleanedText];
+        }
+
         const chunks: string[] = [];
         let current = '';
 
         for (const sentence of rawSentences) {
-            if ((current + sentence).length > 260 && current) {
+            // 第1チャンクだけは早く話し始めるために80文字前後で早めに確定する
+            const maxLenForCurrentChunk = chunks.length === 0 ? 80 : 240;
+
+            if ((current + sentence).length > maxLenForCurrentChunk && current) {
                 chunks.push(current);
                 current = sentence;
             } else {
@@ -234,6 +243,7 @@ export class VoiceManager {
 
     /**
      * ハコさんの返答をVOICEVOXで最後まで同じ声質で読み上げる
+     * （第1チャンクを再生中に、裏で次のチャンクを先読み合成することで待ち時間を大幅短縮！）
      */
     public async speak(
         rawText: string,
@@ -260,18 +270,29 @@ export class VoiceManager {
         const speaker = overrideSpeakerId ?? this.settings.speakerId;
 
         try {
+            // 最初のチャンクの合成を開始
+            let nextChunkPromise: Promise<{ url: string; revoke: boolean; applyRate: boolean } | null> | null =
+                this.prepareChunkAudioUrl(chunks[0], speaker, reqId);
+
             for (let i = 0; i < chunks.length; i++) {
                 if (reqId !== this.activeRequestId) return;
 
-                // 2チャンク目以降はWeb APIのクールダウンのため少し待ってからリクエストする
-                if (i > 0) {
-                    this.updateStatus('loading', targetId);
-                    await new Promise(r => setTimeout(r, 1200));
-                }
+                this.updateStatus('loading', targetId);
+                const audioInfo = await nextChunkPromise;
                 if (reqId !== this.activeRequestId) return;
 
-                const audioInfo = await this.prepareChunkAudioUrl(chunks[i], speaker, reqId);
-                if (reqId !== this.activeRequestId) return;
+                // いま取得したチャンクを再生開始する直前に、次のチャンク(i+1)を裏で先読み合成スタート！
+                if (i + 1 < chunks.length) {
+                    const nextText = chunks[i + 1];
+                    nextChunkPromise = (async () => {
+                        // Web APIの連続リクエスト制限を避けるため、しゃべっている裏で1秒だけ待ってから合成リクエスト
+                        await new Promise(r => setTimeout(r, 1000));
+                        if (reqId !== this.activeRequestId) return null;
+                        return this.prepareChunkAudioUrl(nextText, speaker, reqId);
+                    })();
+                } else {
+                    nextChunkPromise = null;
+                }
 
                 if (audioInfo) {
                     this.updateStatus('playing', targetId);
@@ -286,13 +307,19 @@ export class VoiceManager {
     }
 
     /**
-     * 1チャンク分の音声URLを ローカルVOICEVOX → Web VOICEVOX の順で取得する
+     * 1チャンク分の音声URLを キャッシュ → ローカルVOICEVOX → Web VOICEVOX の順で取得する
      */
     private async prepareChunkAudioUrl(
         chunkText: string,
         speaker: number,
         reqId: number
     ): Promise<{ url: string; revoke: boolean; applyRate: boolean } | null> {
+        const cacheKey = `${speaker}:${chunkText}`;
+        const cachedUrl = this.audioUrlCache.get(cacheKey);
+        if (cachedUrl) {
+            return { url: cachedUrl, revoke: false, applyRate: true };
+        }
+
         // 1. ローカルVOICEVOX
         const localUrl = await this.fetchLocalVoicevoxUrl(chunkText, speaker, reqId);
         if (localUrl) {
@@ -303,6 +330,7 @@ export class VoiceManager {
         // 2. Web版 VOICEVOX (tts.quest)
         const webUrl = await this.fetchWebVoicevoxUrl(chunkText, speaker, reqId);
         if (webUrl) {
+            this.audioUrlCache.set(cacheKey, webUrl);
             return { url: webUrl, revoke: false, applyRate: true };
         }
         return null;
