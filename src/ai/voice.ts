@@ -135,7 +135,7 @@ export class VoiceManager {
     }
 
     /**
-     * 長い文章でもWeb APIが途切れないよう、句点（。！？）や改行ごとに90文字前後のチャンクに分割する
+     * 長い文章を句点（。！？）や改行ごとに160文字前後のチャンクにまとめる（分割数を減らしてAPI制限を防ぐ）
      */
     private splitIntoChunks(cleanedText: string): string[] {
         const rawSentences = cleanedText
@@ -147,8 +147,8 @@ export class VoiceManager {
         let current = '';
 
         for (const sentence of rawSentences) {
-            // 1文自体が100文字を超える場合は読点（、）でさらに分割
-            if (sentence.length > 100) {
+            // 1文自体が170文字を超える場合は読点（、）で分割
+            if (sentence.length > 170) {
                 if (current) {
                     chunks.push(current);
                     current = '';
@@ -156,7 +156,7 @@ export class VoiceManager {
                 const subParts = sentence.split(/(?<=[、，,])\s*/);
                 let subCurrent = '';
                 for (const part of subParts) {
-                    if ((subCurrent + part).length > 90 && subCurrent) {
+                    if ((subCurrent + part).length > 150 && subCurrent) {
                         chunks.push(subCurrent);
                         subCurrent = part;
                     } else {
@@ -167,7 +167,7 @@ export class VoiceManager {
                 continue;
             }
 
-            if ((current + sentence).length > 90 && current) {
+            if ((current + sentence).length > 160 && current) {
                 chunks.push(current);
                 current = sentence;
             } else {
@@ -181,7 +181,8 @@ export class VoiceManager {
     }
 
     /**
-     * ハコさんの返答をVOICEVOXで最後まで途切れず読み上げる（チャンク分割＋先読みプリフェッチ再生）
+     * ハコさんの返答をVOICEVOXで最後まで同じ声質で読み上げる
+     * （途中でブラウザTTSに勝手に切り替わって別人になるのを防ぐため、1チャンク目でVOICEVOXが成功したら最後までVOICEVOXを維持する）
      */
     public async speak(rawText: string, force: boolean = false, overrideSpeakerId?: number): Promise<void> {
         if (!this.settings.enabled && !force) return;
@@ -199,26 +200,19 @@ export class VoiceManager {
         const speaker = overrideSpeakerId ?? this.settings.speakerId;
 
         try {
-            // チャンク1つ目の音声URL取得を開始
-            let nextUrlPromise: Promise<{ url: string; revoke: boolean; applyRate: boolean } | null> =
-                this.prepareChunkAudioUrl(chunks[0], speaker, reqId);
+            let voicevoxSucceededOnce = false;
 
             for (let i = 0; i < chunks.length; i++) {
                 if (reqId !== this.activeRequestId) return;
 
-                // 現在のチャンクの音声準備完了を待つ
-                const audioInfo = await nextUrlPromise;
+                const audioInfo = await this.prepareChunkAudioUrl(chunks[i], speaker, reqId);
                 if (reqId !== this.activeRequestId) return;
 
-                // 現在のチャンクを再生開始する直前に、次のチャンクの音声合成を裏で先行リクエスト（プリフェッチ）！
-                if (i + 1 < chunks.length) {
-                    nextUrlPromise = this.prepareChunkAudioUrl(chunks[i + 1], speaker, reqId);
-                }
-
                 if (audioInfo) {
+                    voicevoxSucceededOnce = true;
                     await this.playAudioUrl(audioInfo.url, audioInfo.revoke, audioInfo.applyRate);
-                } else {
-                    // API制限等で取得できなかったチャンクはブラウザTTSで途切れず繋ぐ
+                } else if (!voicevoxSucceededOnce) {
+                    // 最初からVOICEVOXに全く繋がらないオフライン環境等の場合のみブラウザTTSを使用
                     await this.speakWithBrowserTTSAsync(chunks[i], speaker, reqId);
                 }
             }
@@ -286,21 +280,28 @@ export class VoiceManager {
 
     private async fetchWebVoicevoxUrl(text: string, speaker: number, reqId: number): Promise<string | null> {
         try {
-            // レート制限(retryAfter)が返ってきた場合は待機してリトライする
-            for (let attempt = 0; attempt < 2; attempt++) {
+            // レート制限(retryAfter)が返ってきた場合はしっかり待機して最大5回までリトライする（途中で別人の声になるのを防ぐ）
+            for (let attempt = 0; attempt < 5; attempt++) {
                 if (reqId !== this.activeRequestId) return null;
                 const res = await fetch(
                     `https://api.tts.quest/v3/voicevox/synthesis?text=${encodeURIComponent(text)}&speaker=${speaker}`
                 );
-                if (!res.ok) return null;
+                if (!res.ok) {
+                    await new Promise(r => setTimeout(r, 1500));
+                    continue;
+                }
                 const data = await res.json();
 
                 if (data?.retryAfter && typeof data.retryAfter === 'number') {
-                    await new Promise(r => setTimeout(r, (data.retryAfter + 1) * 1000));
+                    const waitMs = Math.min(8000, (data.retryAfter + 1) * 1000);
+                    await new Promise(r => setTimeout(r, waitMs));
                     continue;
                 }
 
-                if (!data || !data.mp3StreamingUrl) return null;
+                if (!data || !data.mp3StreamingUrl) {
+                    await new Promise(r => setTimeout(r, 1500));
+                    continue;
+                }
 
                 if (data.audioStatusUrl) {
                     for (let i = 0; i < 20; i++) {
