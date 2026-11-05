@@ -6,9 +6,9 @@ export interface VoiceSpeedOption {
 }
 
 export const VOICE_SPEED_OPTIONS: VoiceSpeedOption[] = [
-    { label: '🐢 ゆっくり', value: 0.85 },
+    { label: '🐢 ゆっくり', value: 0.90 },
     { label: '🚶 ふつう', value: 1.0 },
-    { label: '🐇 はやめ', value: 1.2 },
+    { label: '🐇 はやめ', value: 1.12 },
 ];
 
 export interface VoiceSpeakerOption {
@@ -146,9 +146,14 @@ export class VoiceManager {
     }
 
     /**
-     * 長い文章を句点（。！？）や改行ごとに160文字前後のチャンクにまとめる（分割数を減らしてAPI制限を防ぐ）
+     * なるべく分割せずに1回のVOICEVOXリクエストで合成できるよう、280文字までは1チャンクにまとめる
+     * （分割するとWeb APIの連続リクエスト制限に引っかかりやすいため）
      */
     private splitIntoChunks(cleanedText: string): string[] {
+        if (cleanedText.length <= 280) {
+            return [cleanedText];
+        }
+
         const rawSentences = cleanedText
             .split(/(?<=[。！？!?\n])\s*/)
             .map(s => s.replace(/\s+/g, ' ').trim())
@@ -158,27 +163,7 @@ export class VoiceManager {
         let current = '';
 
         for (const sentence of rawSentences) {
-            // 1文自体が170文字を超える場合は読点（、）で分割
-            if (sentence.length > 170) {
-                if (current) {
-                    chunks.push(current);
-                    current = '';
-                }
-                const subParts = sentence.split(/(?<=[、，,])\s*/);
-                let subCurrent = '';
-                for (const part of subParts) {
-                    if ((subCurrent + part).length > 150 && subCurrent) {
-                        chunks.push(subCurrent);
-                        subCurrent = part;
-                    } else {
-                        subCurrent += part;
-                    }
-                }
-                if (subCurrent) chunks.push(subCurrent);
-                continue;
-            }
-
-            if ((current + sentence).length > 160 && current) {
+            if ((current + sentence).length > 260 && current) {
                 chunks.push(current);
                 current = sentence;
             } else {
@@ -193,7 +178,7 @@ export class VoiceManager {
 
     /**
      * ハコさんの返答をVOICEVOXで最後まで同じ声質で読み上げる
-     * （途中でブラウザTTSに勝手に切り替わって別人になるのを防ぐため、1チャンク目でVOICEVOXが成功したら最後までVOICEVOXを維持する）
+     * （途中でブラウザ標準音声＝不審者ボイスに絶対切り替わらないよう、ブラウザTTSフォールバックを廃止）
      */
     public async speak(rawText: string, force: boolean = false, overrideSpeakerId?: number): Promise<void> {
         if (!this.settings.enabled && !force) return;
@@ -211,20 +196,20 @@ export class VoiceManager {
         const speaker = overrideSpeakerId ?? this.settings.speakerId;
 
         try {
-            let voicevoxSucceededOnce = false;
-
             for (let i = 0; i < chunks.length; i++) {
+                if (reqId !== this.activeRequestId) return;
+
+                // 2チャンク目以降はWeb APIのクールダウンのため少し待ってからリクエストする
+                if (i > 0) {
+                    await new Promise(r => setTimeout(r, 1200));
+                }
                 if (reqId !== this.activeRequestId) return;
 
                 const audioInfo = await this.prepareChunkAudioUrl(chunks[i], speaker, reqId);
                 if (reqId !== this.activeRequestId) return;
 
                 if (audioInfo) {
-                    voicevoxSucceededOnce = true;
                     await this.playAudioUrl(audioInfo.url, audioInfo.revoke, audioInfo.applyRate);
-                } else if (!voicevoxSucceededOnce) {
-                    // 最初からVOICEVOXに全く繋がらないオフライン環境等の場合のみブラウザTTSを使用
-                    await this.speakWithBrowserTTSAsync(chunks[i], speaker, reqId);
                 }
             }
         } finally {
@@ -364,28 +349,6 @@ export class VoiceManager {
             audio.onended = cleanup;
             audio.onerror = cleanup;
             audio.play().catch(cleanup);
-        });
-    }
-
-    private speakWithBrowserTTSAsync(text: string, speakerId: number, reqId: number): Promise<void> {
-        return new Promise((resolve) => {
-            if (!('speechSynthesis' in window) || reqId !== this.activeRequestId) {
-                resolve();
-                return;
-            }
-            const speakerOption = VOICEVOX_SPEAKERS.find(s => s.id === speakerId) || VOICEVOX_SPEAKERS[0];
-            const utter = new SpeechSynthesisUtterance(text);
-            utter.lang = 'ja-JP';
-            utter.pitch = speakerOption.fallbackPitch;
-            utter.rate = Math.max(0.5, Math.min(2.0, speakerOption.fallbackRate * this.settings.speedScale));
-
-            const voices = window.speechSynthesis.getVoices();
-            const jaVoice = voices.find(v => v.lang.includes('ja') && (v.name.includes('Nanami') || v.name.includes('Kyoko') || v.name.includes('Google')));
-            if (jaVoice) utter.voice = jaVoice;
-
-            utter.onend = () => resolve();
-            utter.onerror = () => resolve();
-            window.speechSynthesis.speak(utter);
         });
     }
 }
