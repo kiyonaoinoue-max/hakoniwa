@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Clock, Cpu, Camera, Mic, MicOff, Volume2, VolumeX, Settings2, X } from 'lucide-react';
+import { Send, Clock, Cpu, Camera, Mic, MicOff, Volume2, VolumeX, Settings2, X, Loader2, Square } from 'lucide-react';
 import { Brain } from '../ai/brain';
 import type { BrainState } from '../ai/types';
-import { voiceManager, VOICEVOX_SPEAKERS, VOICE_SPEED_OPTIONS } from '../ai/voice';
+import { voiceManager, VOICEVOX_SPEAKERS, VOICE_SPEED_OPTIONS, type VoiceStatusSnapshot } from '../ai/voice';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 
@@ -63,6 +63,7 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
     const [selectedSpeed, setSelectedSpeed] = useState(voiceManager.getSettings().speedScale);
     const [showVoiceMenu, setShowVoiceMenu] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
+    const [voiceStatus, setVoiceStatus] = useState<VoiceStatusSnapshot>(voiceManager.getStatus());
 
     // 音声認識 (マイク入力) 状態
     const [isListening, setIsListening] = useState(false);
@@ -80,6 +81,9 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
         voiceManager.setOnSpeakingChange((speaking) => {
             setIsSpeaking(speaking);
         });
+        voiceManager.setOnStatusChange((status) => {
+            setVoiceStatus(status);
+        });
     }, []);
 
     // 新しいAIメッセージが追加されたら（自動トリガー含む）、音声ONなら自動でVOICEVOX読み上げ
@@ -89,7 +93,7 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
         if (lastEp.id !== lastSpokenEpisodeIdRef.current) {
             lastSpokenEpisodeIdRef.current = lastEp.id;
             if (lastEp.speaker === 'ai' && voiceManager.getSettings().enabled) {
-                voiceManager.speak(lastEp.content);
+                voiceManager.speak(lastEp.content, false, undefined, lastEp.id);
             }
         }
     }, [brainState.episodes]);
@@ -231,9 +235,28 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
                     <Cpu className="text-purple-400" size={20} />
                     <span className="font-semibold text-white tracking-wide">Hakoniwa AI</span>
                     {isSpeaking && (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 animate-pulse">
-                            🔊 お話し中...
-                        </span>
+                        <button
+                            type="button"
+                            onClick={() => voiceManager.stop()}
+                            title="タップで読み上げを停止"
+                            className={`text-[11px] px-2.5 py-0.5 rounded-full border flex items-center gap-1 transition-all ${
+                                voiceStatus.phase === 'loading'
+                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                    : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 animate-pulse'
+                            }`}
+                        >
+                            {voiceStatus.phase === 'loading' ? (
+                                <>
+                                    <Loader2 size={11} className="animate-spin" />
+                                    <span>音声準備中...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <Volume2 size={11} />
+                                    <span>お話し中 (停止)</span>
+                                </>
+                            )}
+                        </button>
                     )}
                 </div>
 
@@ -366,17 +389,49 @@ export const ChatInterface: React.FC<ChatProps> = ({ brain, onUpdate, brainState
                             }}>
                                 {ep.speaker === 'user' ? 'YOU' : 'HAKONIWA'}
                             </span>
-                            {ep.speaker === 'ai' && (
-                                <button
-                                    type="button"
-                                    onClick={() => voiceManager.speak(ep.content, true)}
-                                    title="このメッセージを声で聴く (VOICEVOX)"
-                                    className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/20 hover:bg-purple-500/40 text-purple-200 border border-purple-500/30 text-[10px] transition-all"
-                                >
-                                    <Volume2 size={11} />
-                                    <span>再生</span>
-                                </button>
-                            )}
+                            {ep.speaker === 'ai' && (() => {
+                                const isThisActive = voiceStatus.activeId === ep.id;
+                                const isThisLoading = isThisActive && voiceStatus.phase === 'loading';
+                                const isThisPlaying = isThisActive && voiceStatus.phase === 'playing';
+
+                                return (
+                                    <button
+                                        type="button"
+                                        onClick={() => voiceManager.toggleSpeakMessage(ep.id, ep.content)}
+                                        title={
+                                            isThisPlaying
+                                                ? 'タップで再生を停止'
+                                                : isThisLoading
+                                                ? '音声を合成しています（タップでキャンセル）'
+                                                : 'このメッセージを声で聴く (VOICEVOX)'
+                                        }
+                                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all active:scale-95 select-none border ${
+                                            isThisLoading
+                                                ? 'bg-amber-500/30 text-amber-200 border-amber-400/60 shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                                                : isThisPlaying
+                                                ? 'bg-emerald-500/30 text-emerald-200 border-emerald-400/70 shadow-[0_0_12px_rgba(16,185,129,0.4)] animate-pulse'
+                                                : 'bg-purple-500/25 hover:bg-purple-500/40 text-purple-200 border-purple-400/40'
+                                        }`}
+                                    >
+                                        {isThisLoading ? (
+                                            <>
+                                                <Loader2 size={12} className="animate-spin text-amber-300" />
+                                                <span>準備中...</span>
+                                            </>
+                                        ) : isThisPlaying ? (
+                                            <>
+                                                <Square size={10} className="fill-emerald-300 text-emerald-300" />
+                                                <span>再生中（停止）</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Volume2 size={12} />
+                                                <span>再生</span>
+                                            </>
+                                        )}
+                                    </button>
+                                );
+                            })()}
                         </div>
                         <div style={{
                             maxWidth: '85%',

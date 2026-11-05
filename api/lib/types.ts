@@ -1,5 +1,5 @@
 // サーバーサイド用 型定義
-// src/ai/types.ts からコピー
+// src/ai/types.ts と完全同期
 
 export type Timestamp = number; // Unix timestamp
 
@@ -9,6 +9,7 @@ export interface EpisodicMemory {
     speaker: 'user' | 'ai';
     content: string;
     emotion?: string;
+    imageUrl?: string;
 }
 
 export interface Semantics {
@@ -22,7 +23,7 @@ export interface Semantics {
 export interface UserPattern {
     name: string;
     dataPoints: Timestamp[];
-    inferredRanges: string[];
+    inferredRanges: { start: number; end: number }[] | string[];
 }
 
 export interface ActivityLogEntry {
@@ -51,10 +52,30 @@ export interface MealTriggerState {
     lastAskedDate: string;
     lastSuggestedDate: string;
     awaitingMealResponse: boolean;
+    customAskHour?: number;
+    disabled?: boolean;
 }
 
 export interface FortuneTriggerState {
     lastFortuneDate: string;
+    customHour?: number;
+    disabled?: boolean;
+}
+
+export interface SelfCorrectionAction {
+    skipMealToday?: boolean;
+    mealAskHour?: number | null;
+    disableMealTrigger?: boolean | null;
+    fortuneHour?: number | null;
+    disableFortuneTrigger?: boolean | null;
+    recommendationHour?: number | null;
+    disableRecommendationTrigger?: boolean | null;
+    disableResearchTrigger?: boolean | null;
+    queueResearchTopic?: string | null;
+    researchDay?: 'sat' | 'sun' | 'both' | null;
+    researchHour?: number | null;
+    deleteConceptTerm?: string | null;
+    cancelReminderKeyword?: string | null;
 }
 
 export interface Recommendation {
@@ -69,6 +90,26 @@ export interface Recommendation {
 
 export interface RecommendationTriggerState {
     lastRecommendationDate: string;
+    customHour?: number;
+    disabled?: boolean;
+}
+
+export interface ResearchNote {
+    id: string;
+    date: string;
+    seedTopic: string;
+    wikiTitle: string;
+    wikiUrl?: string;
+    summary: string;
+    timestamp: number;
+}
+
+export interface ResearchTriggerState {
+    lastResearchDate: string;
+    disabled?: boolean;
+    queuedTopic?: string;
+    preferredDay?: 'sat' | 'sun' | 'both';
+    preferredHour?: number;
 }
 
 export interface CuriosityTriggerState {
@@ -99,7 +140,7 @@ export interface ReminderEntry {
     id: string;
     content: string;
     remindAt: Timestamp;
-    repeat: 'daily' | 'weekly' | 'none';
+    repeat?: 'daily' | 'weekly' | 'none';
     done: boolean;
     notified: boolean;
     createdAt: Timestamp;
@@ -119,6 +160,8 @@ export interface BrainState {
     fortuneTrigger: FortuneTriggerState;
     recommendations: Recommendation[];
     recommendationTrigger: RecommendationTriggerState;
+    researchNotes?: ResearchNote[];
+    researchTrigger?: ResearchTriggerState;
     curiosityTrigger?: CuriosityTriggerState;
     personality: PersonalityVector;
     modeState: ModeState;

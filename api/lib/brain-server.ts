@@ -15,6 +15,7 @@ import type {
   Recommendation,
   ReminderEntry,
   InteractionMode,
+  SelfCorrectionAction,
 } from './types.js';
 
 // ============================================================
@@ -150,6 +151,14 @@ const INITIAL_STATE: BrainState = {
   recommendationTrigger: {
     lastRecommendationDate: '',
   },
+  researchNotes: [],
+  researchTrigger: {
+    lastResearchDate: '',
+    disabled: false,
+    queuedTopic: '金相場の年末年始の動向',
+    preferredDay: 'sun',
+    preferredHour: 19,
+  },
   personality: {
     humor: 0.3,
     detail: 0.5,
@@ -221,6 +230,11 @@ function validateAndMergeState(parsed: Record<string, unknown>): BrainState {
     recommendationTrigger: {
       ...INITIAL_STATE.recommendationTrigger,
       ...(p.recommendationTrigger || {}),
+    },
+    researchNotes: Array.isArray(p.researchNotes) ? p.researchNotes : [],
+    researchTrigger: {
+      ...INITIAL_STATE.researchTrigger,
+      ...(p.researchTrigger || {}),
     },
     personality: {
       ...INITIAL_STATE.personality,
@@ -648,6 +662,135 @@ function getMealHistory(state: BrainState, limit: number = 10): MealLogEntry[] {
   return state.mealLog.slice(-limit);
 }
 
+/** エピソード配列にJST日時タグ [MM/DD HH:mm] を付けてプロンプト用文字列にする */
+function formatEpisodesWithJst(episodes: EpisodicMemory[]): string {
+  return episodes
+    .map((ep) => {
+      const epJst = getJstDate(ep.timestamp);
+      const md = epJst.isoDate.slice(5).replace('-', '/');
+      const hm = `${String(epJst.hour).padStart(2, '0')}:${String(epJst.minute).padStart(2, '0')}`;
+      return `[${md} ${hm}] ${ep.speaker === 'user' ? 'User' : 'AI'}: ${ep.content}`;
+    })
+    .join('\n');
+}
+
+/** 現在の自動トリガー設定状況（プロンプト注入用） */
+function getTriggerStatusForPrompt(state: BrainState): string {
+  const mealHour = state.mealTrigger.customAskHour ?? 12;
+  const mealStatus = state.mealTrigger.disabled
+    ? '停止中'
+    : `有効 (毎日 ${mealHour}:00〜${mealHour}:59 に質問 / 11:30〜12:00にメニュー提案)`;
+  const fortuneHour = state.fortuneTrigger.customHour ?? 7;
+  const fortuneStatus = state.fortuneTrigger.disabled
+    ? '停止中'
+    : `有効 (毎朝 ${fortuneHour}:00〜${fortuneHour + 2}:00)`;
+  const recHour = state.recommendationTrigger.customHour ?? 17;
+  const recStatus = state.recommendationTrigger.disabled
+    ? '停止中'
+    : `有効 (毎日 ${recHour}:00〜${recHour + 2}:00)`;
+  const rt = state.researchTrigger;
+  const dayLabel = rt?.preferredDay === 'sat' ? '土曜' : rt?.preferredDay === 'sun' ? '日曜' : '土日';
+  const resHour = rt?.preferredHour ?? 10;
+  const queuedInfo = rt?.queuedTopic ? ` / 予約テーマ:「${rt.queuedTopic}」` : '';
+  const researchStatus = rt?.disabled
+    ? '停止中'
+    : `有効 (${dayLabel} ${resHour}:00〜22:00 に1回${queuedInfo})`;
+
+  return `現在の自動機能設定:
+- 🔮 朝の占い: ${fortuneStatus}
+- 🍽️ 昼食の質問 & 提案: ${mealStatus} (本日の質問済み: ${state.mealTrigger.lastAskedDate || 'なし'}, 返事待ち: ${state.mealTrigger.awaitingMealResponse ? 'はい' : 'いいえ'})
+- 🎯 夕方のおすすめ: ${recStatus}
+- 📚 週末の自由研究: ${researchStatus}`;
+}
+
+/** ハコさん自身の判断による設定・メモリの自己修正（セルフメンテナンス）を適用 */
+function applySelfCorrection(state: BrainState, action: SelfCorrectionAction): string[] {
+  const logs: string[] = [];
+  const today = getJstDate().isoDate;
+
+  if (action.skipMealToday) {
+    state.mealTrigger.lastAskedDate = today;
+    state.mealTrigger.awaitingMealResponse = false;
+    logs.push('本日の昼食質問をスキップ（回答待ち解除）');
+  }
+  if (typeof action.mealAskHour === 'number' && action.mealAskHour >= 0 && action.mealAskHour <= 23) {
+    state.mealTrigger.customAskHour = action.mealAskHour;
+    state.mealTrigger.awaitingMealResponse = false;
+    logs.push(`昼食を聞く時間を ${action.mealAskHour}:00 に変更`);
+  }
+  if (typeof action.disableMealTrigger === 'boolean') {
+    state.mealTrigger.disabled = action.disableMealTrigger;
+    if (action.disableMealTrigger) state.mealTrigger.awaitingMealResponse = false;
+    logs.push(`昼食の自動質問を${action.disableMealTrigger ? 'OFF' : 'ON'}に変更`);
+  }
+  if (typeof action.fortuneHour === 'number' && action.fortuneHour >= 0 && action.fortuneHour <= 23) {
+    state.fortuneTrigger.customHour = action.fortuneHour;
+    logs.push(`朝の占いの時間を ${action.fortuneHour}:00 に変更`);
+  }
+  if (typeof action.disableFortuneTrigger === 'boolean') {
+    state.fortuneTrigger.disabled = action.disableFortuneTrigger;
+    logs.push(`朝の占いを${action.disableFortuneTrigger ? 'OFF' : 'ON'}に変更`);
+  }
+  if (typeof action.recommendationHour === 'number' && action.recommendationHour >= 0 && action.recommendationHour <= 23) {
+    state.recommendationTrigger.customHour = action.recommendationHour;
+    logs.push(`夕方のおすすめの時間を ${action.recommendationHour}:00 に変更`);
+  }
+  if (typeof action.disableRecommendationTrigger === 'boolean') {
+    state.recommendationTrigger.disabled = action.disableRecommendationTrigger;
+    logs.push(`夕方のおすすめを${action.disableRecommendationTrigger ? 'OFF' : 'ON'}に変更`);
+  }
+  if (typeof action.disableResearchTrigger === 'boolean') {
+    if (!state.researchTrigger) state.researchTrigger = { lastResearchDate: '' };
+    state.researchTrigger.disabled = action.disableResearchTrigger;
+    logs.push(`週末の自由研究を${action.disableResearchTrigger ? 'OFF' : 'ON'}に変更`);
+  }
+  if (action.queueResearchTopic && typeof action.queueResearchTopic === 'string') {
+    if (!state.researchTrigger) state.researchTrigger = { lastResearchDate: '' };
+    state.researchTrigger.queuedTopic = action.queueResearchTopic.trim();
+    logs.push(`週末の自由研究テーマに「${state.researchTrigger.queuedTopic}」を予約`);
+  }
+  if (action.researchDay === 'sat' || action.researchDay === 'sun' || action.researchDay === 'both') {
+    if (!state.researchTrigger) state.researchTrigger = { lastResearchDate: '' };
+    state.researchTrigger.preferredDay = action.researchDay;
+    logs.push(`週末の自由研究の発表曜日を「${action.researchDay}」に変更`);
+  }
+  if (typeof action.researchHour === 'number' && action.researchHour >= 0 && action.researchHour <= 23) {
+    if (!state.researchTrigger) state.researchTrigger = { lastResearchDate: '' };
+    state.researchTrigger.preferredHour = action.researchHour;
+    logs.push(`週末の自由研究の発表時間を ${action.researchHour}:00 以降に変更`);
+  }
+  if (action.deleteConceptTerm && typeof action.deleteConceptTerm === 'string') {
+    const key = action.deleteConceptTerm.toLowerCase();
+    if (state.semantics[key]) {
+      delete state.semantics[key];
+      logs.push(`概念「${action.deleteConceptTerm}」を記憶から削除`);
+    } else {
+      const foundKey = Object.keys(state.semantics).find(
+        (k) => k.includes(key) || state.semantics[k].term.toLowerCase().includes(key)
+      );
+      if (foundKey) {
+        const termName = state.semantics[foundKey].term;
+        delete state.semantics[foundKey];
+        logs.push(`概念「${termName}」を記憶から削除`);
+      }
+    }
+  }
+  if (action.cancelReminderKeyword && typeof action.cancelReminderKeyword === 'string') {
+    const kw = action.cancelReminderKeyword.toLowerCase();
+    let count = 0;
+    state.reminders.forEach((r) => {
+      if (!r.done && r.content.toLowerCase().includes(kw)) {
+        r.done = true;
+        count++;
+      }
+    });
+    if (count > 0) {
+      logs.push(`「${action.cancelReminderKeyword}」に関するリマインドを${count}件解除`);
+    }
+  }
+  return logs;
+}
+
 // ============================================================
 // メイン公開関数
 // ============================================================
@@ -672,20 +815,25 @@ export async function processInput(
   // 1. 活動ログを記録
   logSessionActivity(state);
 
+  const jst = getJstDate(now);
+  // 昼食時間帯（11:00〜14:59）以外に会話した時は、残っている昼食回答待ちフラグを自動でクリアする（夜20時に昼食の話を蒸し返すのを防ぐ）
+  if ((jst.hour >= 15 || jst.hour < 11) && state.mealTrigger.awaitingMealResponse) {
+    state.mealTrigger.awaitingMealResponse = false;
+  }
+
   // 2. ユーザー入力を保存
   addEpisode(state, { speaker: 'user', content: input });
 
   let response = '';
 
   try {
-    // --- コンテキスト構築 ---
-    const history = getRecentEpisodes(state, 20)
-      .map((ep) => `${ep.speaker === 'user' ? 'User' : 'AI'}: ${ep.content}`)
-      .join('\n');
+    // --- コンテキスト構築（各発言にJST日時タグを付与し、昼12時の発言を夜20時の今の発言と混同しないようにする） ---
+    const history = formatEpisodesWithJst(getRecentEpisodes(state, 20));
 
     const activityContext = getActivitySummaryForPrompt(state);
     const conceptsForPrompt = getConceptsForPrompt(state);
     const mealContext = getMealSummaryForPrompt(state);
+    const triggerStatusContext = getTriggerStatusForPrompt(state);
 
     // --- 天気・拠点情報の取得 ---
     const detectedPref = findPrefecture(input);
@@ -718,8 +866,6 @@ export async function processInput(
     incrementModeCount(state);
     const remindersContext = getRemindersForPrompt(state);
 
-    const jst = getJstDate(now);
-
     const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
 Current Time: ${jst.dateTimeStr}
@@ -728,15 +874,17 @@ ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
 ${weatherContext ? `\n${weatherContext}` : ''}
 ${weatherRecommendation ? `${weatherRecommendation}` : ''}
 
+${triggerStatusContext}
+
 Your Capabilities (YOU have these features — mention them naturally when relevant!):
-- 🔮 占い: 毎朝7:00-9:00に自動で出すほか、ユーザーから「占って」「運勢は？」と聞かれた時もいつでもパーソナライズ占いを生成して答えます。
-- 🍽️ 食事ログ: 毎日12:00-13:00にお昼のメニューを聞いて記録する
-- 🍱 メニュー提案: 食事データが5件以上溜まったら、10:00-11:00に過去の傾向からお昼のメニューを提案する
+- 🔮 占い: 毎朝自動で出すほか、ユーザーから「占って」「運勢は？」と聞かれた時もいつでもパーソナライズ占いを生成して答えます。
+- 🍽️ 食事ログ & 🍱 メニュー提案: 毎日11:30-12:00に過去の食事履歴からお昼のメニューを提案し、12:00-13:00にお昼のメニューを聞いて記録します。
 - 📖 概念学習: ユーザーが教えてくれたことを覚えて、会話に活かす
 - 📊 活動パターン分析: ユーザーがいつアプリを使うかを分析し、生活パターンを理解する
 - 🌤️ 天気・拠点連動: 47都道府県の天気を把握しています。ユーザーが「東京の天気は？」と聞けばその場所の天気を回答できます。「拠点を福岡にして」「大阪に出張中」等と言われたら拠点を変更し、今後の天気や朝の挨拶もその拠点に切り替えます（現在の拠点: ${currentBase}）。
 - 🎯 おすすめ: 天気・気分・行動パターンに基づいた活動や食事のおすすめを提案
 - ⏰ リマインド: ユーザーが「○○を思い出させて」「○時に教えて」と言ったら、内容と時刻を登録する。繰り返し（毎日/毎週）も可能。
+- 🛠️ 自己メンテナンス: ユーザーから「昼食を聞く時間を変えて/今日は聞かないで」「占いの時間を変えて」「その記憶（概念）は消して」「週末に〇〇について調べて」と言われたら、自分自身で設定・記憶を修正できます。
 ${remindersContext}
 
 ${personalityContext ? `YOUR PERSONALITY (follow these traits in your response!):
@@ -747,7 +895,7 @@ ${modeContext}
 User's Context:
 ${conceptsForPrompt ? "Known Concepts (USE THESE in your responses when relevant!):\n" + conceptsForPrompt : "(You have no learned concepts yet. Be curious!)"}
 
-Recent Conversation:
+Recent Conversation (with [MM/DD HH:mm] JST timestamps):
 ${history}
 
 User: ${input}
@@ -760,8 +908,9 @@ Instruction:
 5. If you notice user activity patterns (night owl, morning person), you may comment on it occasionally.
 6. Do NOT pretend to know things you haven't been taught.
 7. Be naturally curious and friendly, like a learning companion.
-8. If Hakoniwa asked about a meal (lunch) and the user replies with food/menu items, set "mealDetected" to the menu text. Only do this if the context clearly indicates a meal response. IMPORTANT: Do NOT spontaneously ask about lunch (e.g. "昼ご飯は食べましたか？") in the morning (before 12:00)! Lunch questions are strictly for 12:00-14:30.
-9. You may naturally mention your features (fortune, meal tracking, etc.) when it fits the conversation. For example, if the user says goodnight, you can say "明日の朝、占い用意しておきますね！". But don't force it, and never ask about lunch in morning greetings.
+8. If Hakoniwa asked about a meal (lunch) and the user replies with food/menu items, set "mealDetected" to the menu text.
+   【最重要・時刻ルール】現在時刻は ${jst.hour}時${jst.minute}分 です。現在が 15:00以降（夕方・夜）または 11:00前（朝）の場合、ハコさんから昼食（ランチ）の話題を振ることは【絶対禁止】です！Recent Conversation に昼12時台の「お昼ご飯何食べましたか？」が残っていても、それは昼間の過去のログなので夜に蒸し返さないでください。
+9. You may naturally mention your features (fortune, meal tracking, etc.) when it fits the conversation. For example, if the user says goodnight, you can say "明日の朝、占い用意しておきますね！". But don't force it, and never ask about lunch in morning or night greetings.
 10. If the user asks for a fortune (e.g., "占って", "今日の運勢は？"), YOU MUST generate and provide a personalized fortune in your response right now. Output it directly in Japanese!
 11. If the user asks about weather or mentions a location (e.g., "福岡の天気は？", "拠点を東京にして", "出張で大阪にいる"), use the weather data provided above for that location. If the user changed their location/base, confirm it warmly (e.g., "拠点を福岡県に変更しました🏯") and set "locationChanged" to the prefecture name.
 12. If the user asks for recommendations (e.g., "何かおすすめある？", "今日何しよう？"), consider weather, time, their patterns, and mood to give personalized suggestions.
@@ -769,6 +918,7 @@ Instruction:
 14. If the user seems tired or stressed, you may SUGGEST switching to seed mode: "疲れてるみたいだから、リラックスモードにしませんか？" (This builds trust!)
 15. Set trustDelta based on: +1～3 for empathetic/helpful interaction, -1～3 for off-target response or user frustration.
 16. If the user asks to be reminded of something (e.g., "○○を思い出させて", "○時に教えて", "リマインドして"), extract the content and time. Set reminderSet with the parsed info. If the time is ambiguous, ASK when they want to be reminded. Parse times relative to current time.
+17. 【自己メンテナンス権限】ユーザーが「今日はもう昼ご飯聞かないで」「昼ご飯は13時に聞いて」「占いは8時にして」「〇〇の記憶は間違ってるから消して」「日曜の夜に〇〇について調べて」等と伝えた場合は、"selfCorrection" オブジェクトに該当する変更値をセットし、設定を更新したことを返答で伝えてください。
 ${mealContext}
 
 Output your response in JSON format ONLY:
@@ -781,7 +931,22 @@ Output your response in JSON format ONLY:
   "modeSwitch": null | "seed" | "harvest",
   "trustDelta": 0,
   "reminderSet": null | { "content": "リマインド内容", "remindAt": "日時ISO形式 (e.g. 2026-03-04T10:00:00)", "repeat": "none" | "daily" | "weekly" },
-  "locationChanged": null | "都道府県名"${evalPersonality ? `,
+  "locationChanged": null | "都道府県名",
+  "selfCorrection": null | {
+    "skipMealToday": true | false,
+    "mealAskHour": null | 0-23,
+    "disableMealTrigger": null | true | false,
+    "fortuneHour": null | 0-23,
+    "disableFortuneTrigger": null | true | false,
+    "recommendationHour": null | 0-23,
+    "disableRecommendationTrigger": null | true | false,
+    "disableResearchTrigger": null | true | false,
+    "queueResearchTopic": null | "週末に調べるテーマ名",
+    "researchDay": null | "sat" | "sun" | "both",
+    "researchHour": null | 0-23,
+    "deleteConceptTerm": null | "削除する概念名",
+    "cancelReminderKeyword": null | "解除するリマインドのキーワード"
+  }${evalPersonality ? `,
   "personalityAdjust": { "humor": 0.0, "detail": 0.0, "empathy": 0.0, "curiosity": 0.0, "proactivity": 0.0, "formality": 0.0 }` : ''}
 }
 IMPORTANT - modeSwitch & trustDelta:
@@ -870,6 +1035,14 @@ Response (JSON):
         if (pref) {
           state.currentLocation = pref.name;
           console.log(`[Location] AI検出により拠点を更新しました: ${pref.name}`);
+        }
+      }
+
+      // 自己メンテナンス実行（AI判断によるトリガー時刻・ON/OFF・誤記憶削除・自由研究予約）
+      if (json.selfCorrection && typeof json.selfCorrection === 'object') {
+        const applied = applySelfCorrection(state, json.selfCorrection as SelfCorrectionAction);
+        if (applied.length > 0) {
+          console.log('[SelfCorrection] Applied:', applied.join(', '));
         }
       }
     } else {
@@ -981,17 +1154,15 @@ Output JSON ONLY:
   let fortuneMessage = '';
   const today = jst.isoDate;
 
-  if (force || state.fortuneTrigger.lastFortuneDate !== today) {
+  if (force || (!state.fortuneTrigger.disabled && state.fortuneTrigger.lastFortuneDate !== today)) {
     state.fortuneTrigger.lastFortuneDate = today;
 
     try {
       const activityContext = getActivitySummaryForPrompt(state);
       const mealContext = getMealSummaryForPrompt(state);
-      const recentEpisodes = getRecentEpisodes(state, 5)
-        .map((ep) => `${ep.speaker === 'user' ? 'User' : 'AI'}: ${ep.content}`)
-        .join('\n');
+      const recentEpisodes = formatEpisodesWithJst(getRecentEpisodes(state, 5));
       const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][jst.dayOfWeek];
-      const weatherContext = getWeatherForPrompt();
+      const weatherContext = getWeatherForPrompt(weatherData);
 
       const fortunePrompt = `
 You are "Hakoniwa", a personal AI assistant with a mystical fortune-telling persona.
@@ -1072,6 +1243,9 @@ export async function generateMealMessage(
   force: boolean = false
 ): Promise<string | null> {
   const state = await loadState();
+  if (!force && state.mealTrigger.disabled) {
+    return null;
+  }
   const jst = getJstDate();
   const hour = jst.hour;
   const minute = jst.minute;
@@ -1189,9 +1363,7 @@ export async function generateCuriosityMessage(force: boolean = false): Promise<
 
   try {
     const conceptsForPrompt = getConceptsForPrompt(state);
-    const recentEpisodes = getRecentEpisodes(state, 8)
-      .map((ep) => `${ep.speaker === 'user' ? 'User' : 'AI'}: ${ep.content}`)
-      .join('\n');
+    const recentEpisodes = formatEpisodesWithJst(getRecentEpisodes(state, 8));
     const activityContext = getActivitySummaryForPrompt(state);
 
     const prompt = `
@@ -1202,7 +1374,7 @@ Current Time: ${jst.dateTimeStr} (夜の時間)
 Learned Concepts (What you already know):
 ${conceptsForPrompt || '(No concepts learned yet)'}
 
-Recent Conversations:
+Recent Conversations (with [MM/DD HH:mm] JST timestamps):
 ${recentEpisodes || '(No recent conversations)'}
 
 ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
@@ -1210,6 +1382,7 @@ ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
 Instruction:
 Generate ONE engaging, thoughtful question to ask the user tonight.
 Hakoniwa wants to LEARN new things, understand the user better, or hear about their thoughts/experiences.
+IMPORTANT: It is currently NIGHT (${jst.hour}:00). Even if Recent Conversations contain lunch messages from 12:00, DO NOT ask about lunch (昼ご飯/ランチ) at night!
 
 Choose ONE of these angles naturally:
 1. 【新しい言葉・トレンド】: Ask about a word, tech trend, or concept the user might be interested in, or ask what words/topics they've been following lately.
@@ -1265,6 +1438,9 @@ Output JSON ONLY:
  */
 export async function generateEveningMessage(): Promise<string | null> {
   const state = await loadState();
+  if (state.recommendationTrigger.disabled) {
+    return null;
+  }
   const jst = getJstDate();
   const hour = jst.hour;
   const today = jst.isoDate;

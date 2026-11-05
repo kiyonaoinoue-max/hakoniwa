@@ -1,4 +1,11 @@
-// VOICEVOX (ローカルエンジン + Web API 分割連続再生 + キャラクター別トーン調整TTSフォールバック) & Web Speech API 音声認識マネージャー
+// VOICEVOX (ローカルエンジン + Web API 分割連続再生 + スマホブラウザ自動再生ロック解除対応) & Web Speech API 音声認識マネージャー
+
+export type VoicePlaybackPhase = 'idle' | 'loading' | 'playing';
+
+export interface VoiceStatusSnapshot {
+    phase: VoicePlaybackPhase;
+    activeId: string | null;
+}
 
 export interface VoiceSpeedOption {
     label: string;
@@ -33,17 +40,23 @@ export const VOICEVOX_SPEAKERS: VoiceSpeakerOption[] = [
 interface VoiceSettings {
     enabled: boolean;
     speakerId: number;
-    speedScale: number; // 0.85 | 1.0 | 1.2
+    speedScale: number;
 }
 
 const VOICE_STORAGE_KEY = 'hakoniwa_voice_settings_v1';
 
+// スマホブラウザ(iOS Safari / Android Chrome)でタップ直後にAudio再生権限をアンロックするための極小無音WAV
+const SILENT_WAV_DATA_URI =
+    'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
 export class VoiceManager {
     private settings: VoiceSettings;
-    private currentAudio: HTMLAudioElement | null = null;
-    private isSpeakingState = false;
+    private sharedAudio: HTMLAudioElement | null = null;
+    private phase: VoicePlaybackPhase = 'idle';
+    private activeId: string | null = null;
     private activeRequestId = 0;
     private onStateChange?: (speaking: boolean) => void;
+    private onStatusChange?: (status: VoiceStatusSnapshot) => void;
 
     constructor() {
         this.settings = this.loadSettings();
@@ -91,8 +104,8 @@ export class VoiceManager {
 
     public setSpeedScale(speedScale: number): void {
         this.settings.speedScale = speedScale;
-        if (this.currentAudio) {
-            this.currentAudio.playbackRate = speedScale;
+        if (this.sharedAudio && this.phase === 'playing') {
+            this.sharedAudio.playbackRate = speedScale;
         }
         this.saveSettings();
     }
@@ -101,25 +114,57 @@ export class VoiceManager {
         this.onStateChange = cb;
     }
 
-    private setSpeaking(val: boolean): void {
-        this.isSpeakingState = val;
-        this.onStateChange?.(val);
+    public setOnStatusChange(cb: (status: VoiceStatusSnapshot) => void): void {
+        this.onStatusChange = cb;
+    }
+
+    public getStatus(): VoiceStatusSnapshot {
+        return { phase: this.phase, activeId: this.activeId };
+    }
+
+    private updateStatus(phase: VoicePlaybackPhase, activeId: string | null): void {
+        this.phase = phase;
+        this.activeId = phase === 'idle' ? null : activeId;
+        const isBusy = phase === 'loading' || phase === 'playing';
+        this.onStateChange?.(isBusy);
+        this.onStatusChange?.({ phase: this.phase, activeId: this.activeId });
     }
 
     public isSpeaking(): boolean {
-        return this.isSpeakingState;
+        return this.phase !== 'idle';
+    }
+
+    /**
+     * スマホブラウザ向けに、ユーザータップの同期コンテキスト内で単一のHTMLAudioElementを初期化＆無音アンロックする
+     */
+    private ensureUnlockedAudio(): HTMLAudioElement {
+        if (!this.sharedAudio) {
+            this.sharedAudio = new Audio();
+            this.sharedAudio.preload = 'auto';
+        }
+        try {
+            this.sharedAudio.src = SILENT_WAV_DATA_URI;
+            const p = this.sharedAudio.play();
+            if (p && typeof p.catch === 'function') {
+                p.catch(() => { /* ignore initial unlock error */ });
+            }
+        } catch { /* ignore */ }
+        return this.sharedAudio;
     }
 
     public stop(): void {
         this.activeRequestId++;
-        if (this.currentAudio) {
-            this.currentAudio.pause();
-            this.currentAudio = null;
+        if (this.sharedAudio) {
+            try {
+                this.sharedAudio.onended = null;
+                this.sharedAudio.onerror = null;
+                this.sharedAudio.pause();
+            } catch { /* ignore */ }
         }
         if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
         }
-        this.setSpeaking(false);
+        this.updateStatus('idle', null);
     }
 
     /**
@@ -177,10 +222,25 @@ export class VoiceManager {
     }
 
     /**
-     * ハコさんの返答をVOICEVOXで最後まで同じ声質で読み上げる
-     * （途中でブラウザ標準音声＝不審者ボイスに絶対切り替わらないよう、ブラウザTTSフォールバックを廃止）
+     * 特定のメッセージボタンが押されたときに再生/停止をトグルする
      */
-    public async speak(rawText: string, force: boolean = false, overrideSpeakerId?: number): Promise<void> {
+    public async toggleSpeakMessage(messageId: string, rawText: string): Promise<void> {
+        if (this.activeId === messageId && this.phase !== 'idle') {
+            this.stop();
+            return;
+        }
+        await this.speak(rawText, true, undefined, messageId);
+    }
+
+    /**
+     * ハコさんの返答をVOICEVOXで最後まで同じ声質で読み上げる
+     */
+    public async speak(
+        rawText: string,
+        force: boolean = false,
+        overrideSpeakerId?: number,
+        messageId: string | null = null
+    ): Promise<void> {
         if (!this.settings.enabled && !force) return;
 
         const cleaned = this.cleanTextForSpeech(rawText);
@@ -191,7 +251,11 @@ export class VoiceManager {
 
         this.stop();
         const reqId = this.activeRequestId;
-        this.setSpeaking(true);
+        const targetId = messageId ?? '__system__';
+
+        // タップ直後の同期処理内でスマホ用Audioアンロック＆「準備中(loading)」状態へ即座に遷移！
+        this.ensureUnlockedAudio();
+        this.updateStatus('loading', targetId);
 
         const speaker = overrideSpeakerId ?? this.settings.speakerId;
 
@@ -201,6 +265,7 @@ export class VoiceManager {
 
                 // 2チャンク目以降はWeb APIのクールダウンのため少し待ってからリクエストする
                 if (i > 0) {
+                    this.updateStatus('loading', targetId);
                     await new Promise(r => setTimeout(r, 1200));
                 }
                 if (reqId !== this.activeRequestId) return;
@@ -209,12 +274,13 @@ export class VoiceManager {
                 if (reqId !== this.activeRequestId) return;
 
                 if (audioInfo) {
-                    await this.playAudioUrl(audioInfo.url, audioInfo.revoke, audioInfo.applyRate);
+                    this.updateStatus('playing', targetId);
+                    await this.playAudioUrl(audioInfo.url, audioInfo.revoke, audioInfo.applyRate, reqId);
                 }
             }
         } finally {
             if (reqId === this.activeRequestId) {
-                this.setSpeaking(false);
+                this.updateStatus('idle', null);
             }
         }
     }
@@ -276,7 +342,7 @@ export class VoiceManager {
 
     private async fetchWebVoicevoxUrl(text: string, speaker: number, reqId: number): Promise<string | null> {
         try {
-            // レート制限(retryAfter)が返ってきた場合はしっかり待機して最大5回までリトライする（途中で別人の声になるのを防ぐ）
+            // レート制限(retryAfter)が返ってきた場合はしっかり待機して最大5回までリトライする
             for (let attempt = 0; attempt < 5; attempt++) {
                 if (reqId !== this.activeRequestId) return null;
                 const res = await fetch(
@@ -299,29 +365,29 @@ export class VoiceManager {
                     continue;
                 }
 
-            if (data.audioStatusUrl) {
-                for (let i = 0; i < 25; i++) {
-                    if (reqId !== this.activeRequestId) return null;
-                    try {
-                        const statusRes = await fetch(data.audioStatusUrl);
-                        if (statusRes.ok) {
-                            const statusData = await statusRes.json();
-                            if (statusData.isAudioReady) {
-                                break;
+                if (data.audioStatusUrl) {
+                    for (let i = 0; i < 25; i++) {
+                        if (reqId !== this.activeRequestId) return null;
+                        try {
+                            const statusRes = await fetch(data.audioStatusUrl);
+                            if (statusRes.ok) {
+                                const statusData = await statusRes.json();
+                                if (statusData.isAudioReady) {
+                                    break;
+                                }
+                                if (statusData.isAudioError) {
+                                    return null;
+                                }
                             }
-                            if (statusData.isAudioError) {
-                                return null;
-                            }
-                        }
-                    } catch { /* ignore */ }
-                    await new Promise(r => setTimeout(r, 500));
+                        } catch { /* ignore */ }
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                } else {
+                    await new Promise(r => setTimeout(r, 1500));
                 }
-            } else {
-                await new Promise(r => setTimeout(r, 1500));
-            }
 
-            // StreamingUrlは合成途中のチャンクで声が歪むことがあるため、完成済みの mp3DownloadUrl を優先する
-            return data.mp3DownloadUrl || data.mp3StreamingUrl;
+                // 完成済みの mp3DownloadUrl を優先する
+                return data.mp3DownloadUrl || data.mp3StreamingUrl;
             }
             return null;
         } catch {
@@ -329,26 +395,39 @@ export class VoiceManager {
         }
     }
 
-    private playAudioUrl(url: string, revokeOnEnd: boolean, applyPlaybackRate: boolean = true): Promise<void> {
+    private playAudioUrl(
+        url: string,
+        revokeOnEnd: boolean,
+        applyPlaybackRate: boolean = true,
+        reqId: number
+    ): Promise<void> {
         return new Promise((resolve) => {
-            const audio = new Audio(url);
-            audio.preservesPitch = true;
-            if (applyPlaybackRate) {
-                audio.playbackRate = this.settings.speedScale;
+            if (reqId !== this.activeRequestId) {
+                if (revokeOnEnd) URL.revokeObjectURL(url);
+                resolve();
+                return;
             }
-            this.currentAudio = audio;
+
+            const audio = this.sharedAudio || new Audio();
+            this.sharedAudio = audio;
 
             const cleanup = () => {
+                audio.onended = null;
+                audio.onerror = null;
                 if (revokeOnEnd) URL.revokeObjectURL(url);
-                if (this.currentAudio === audio) {
-                    this.currentAudio = null;
-                }
                 resolve();
             };
 
             audio.onended = cleanup;
             audio.onerror = cleanup;
-            audio.play().catch(cleanup);
+            audio.src = url;
+            audio.preservesPitch = true;
+            audio.playbackRate = applyPlaybackRate ? this.settings.speedScale : 1.0;
+
+            const playPromise = audio.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+                playPromise.catch(cleanup);
+            }
         });
     }
 }
