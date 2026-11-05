@@ -72,10 +72,30 @@ export class Brain {
         return { used, max, remaining, percent };
     }
 
-    // Retry wrapper for API calls with backoff + auto key switching
-    private async callWithRetry(prompt: string, maxRetries: number = 3, useGoogleSearch: boolean = false): Promise<string> {
+    // Retry wrapper for API calls with backoff + auto key switching + optional image / Google Search
+    private async callWithRetry(
+        prompt: string,
+        maxRetries: number = 3,
+        useGoogleSearch: boolean = false,
+        imageDataUrl?: string
+    ): Promise<string> {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
+                // 画像が添付されている場合はマルチモーダルパーツを作成
+                if (imageDataUrl) {
+                    const match = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+                    if (match) {
+                        const mimeType = match[1];
+                        const base64Data = match[2];
+                        const result = await this.model!.generateContent([
+                            prompt,
+                            { inlineData: { mimeType, data: base64Data } }
+                        ]);
+                        this.incrementApiCount();
+                        return result.response.text();
+                    }
+                }
+
                 if (useGoogleSearch) {
                     try {
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -144,14 +164,15 @@ export class Brain {
         return null;
     }
 
-    public async processInput(input: string): Promise<string> {
+    public async processInput(input: string, imageDataUrl?: string): Promise<string> {
         const now = Date.now();
 
         // 1. Log activity
         this.memory.logSessionActivity();
 
-        // 2. Store User Input
-        this.memory.addEpisode({ speaker: 'user', content: input });
+        // 2. Store User Input (画像がある場合はサムネイルURLも一緒に保存)
+        const displayContent = input.trim() || (imageDataUrl ? '📷（写真を見せました）' : '');
+        this.memory.addEpisode({ speaker: 'user', content: displayContent, imageUrl: imageDataUrl });
 
         let response = "";
 
@@ -233,6 +254,7 @@ Your Capabilities (YOU have these features — mention them naturally when relev
   1. 週末自動発表（デフォルトは土日の指定時間、現在予約中のテーマがあればそれを優先して発表）
   2. ユーザーから「今週末（または日曜の夜など）に〇〇を調べて教えて」と予約されたら、selfCorrection の queueResearchTopic / researchDay / researchHour に保存して予約を受け付ける。
   3. ユーザーから「今すぐ〇〇を調べて」「テストとして〇〇を調べて」「自由研究して」と言われた時は、平日であっても「週末しかできません」などと断らずに、**今この場ですぐに調べて発表する**こと！
+- 📸 視覚（写真認識）＆ 🎤 音声会話（VOICEVOX）: ユーザーが見せてくれた写真（料理、風景、モノ、書類など）を実際に目で見て感想を言ったり質問に答えられる。お昼ご飯の写真ならメニュー名を自動判定して食事ログに記録できる！また、VOICEVOXの可愛い声で読み上げる機能も備わっている。
 - 🛠️ 自己メンテナンス権限: ユーザーから各機能（占い・昼食・夕方おすすめ・自由研究）の時間変更やON/OFF、自由研究テーマの予約、間違って覚えた記憶（Memory）の削除、リマインドの取り消しを指示されたら、自分自身で設定データを書き換えて直せる。
 ${remindersContext}
 ${triggerStatusContext}
@@ -249,7 +271,7 @@ ${conceptsForPrompt ? "Known Concepts (USE THESE in your responses when relevant
 Recent Conversation (各発言の先頭に [日時] が付いています。過去の昼の発言と現在の時刻を混同しないこと！):
 ${history}
 
-User: ${input}
+User: ${displayContent}${imageDataUrl ? '\n（※ユーザーが写真を添付して見せています！添付された画像の内容をしっかり見て、自然な感想やコメントを返してください。もし昼食・食べ物の写真であれば、写っている料理名を "mealDetected" に入れて食事ログに記録してください！）' : ''}
 
 Instruction:
 1. You are a curious AI entity "Hakoniwa" that LEARNS and REMEMBERS.
@@ -317,7 +339,7 @@ IMPORTANT for learnedConcepts:
 
 Response (JSON):
 `;
-                const text = await this.callWithRetry(prompt, 3, wantsImmediateResearch);
+                const text = await this.callWithRetry(prompt, 3, wantsImmediateResearch, imageDataUrl);
 
                 // Parse JSON (堅牢化されたJSON抽出)
                 const json = this.extractJson(text);

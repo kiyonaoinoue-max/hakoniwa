@@ -6,6 +6,7 @@ export interface EpisodicMemory {
   speaker: 'user' | 'ai';
   content: string;
   emotion?: string; // Simple emotion tag
+  imageUrl?: string; // 添付された写真の縮小Data URL（チャット表示用）
 }
 
 export interface Semantics {
