@@ -1,4 +1,4 @@
-// VOICEVOX (ローカルエンジン + Web API + キャラクター別トーン調整TTSフォールバック) & Web Speech API 音声認識マネージャー
+// VOICEVOX (ローカルエンジン + Web API 分割連続再生 + キャラクター別トーン調整TTSフォールバック) & Web Speech API 音声認識マネージャー
 
 export interface VoiceSpeedOption {
     label: string;
@@ -33,7 +33,7 @@ export const VOICEVOX_SPEAKERS: VoiceSpeakerOption[] = [
 interface VoiceSettings {
     enabled: boolean;
     speakerId: number;
-    speedScale: number; // 0.8 ~ 1.3 (デフォルト 1.0)
+    speedScale: number; // 0.85 | 1.0 | 1.2
 }
 
 const VOICE_STORAGE_KEY = 'hakoniwa_voice_settings_v1';
@@ -123,7 +123,7 @@ export class VoiceManager {
     }
 
     /**
-     * 読み上げ用にテキストからURLや余計な記号・絵文字を整理する
+     * 読み上げ用にテキストからURLや余計な記号・絵文字を整理する（文字数制限なしで全文対応）
      */
     private cleanTextForSpeech(text: string): string {
         return text
@@ -131,20 +131,66 @@ export class VoiceManager {
             .replace(/🔗\s*出典:?/g, '')
             .replace(/[★☆]{2,}/g, (m) => `星${(m.match(/★/g) || []).length}つ。`)
             .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 220); // Web合成のレスポンスを速くするため最大220文字に制限
+            .trim();
     }
 
     /**
-     * ハコさんの返答をVOICEVOXで読み上げる
-     * overrideSpeakerId が指定されていれば確実にその声IDで合成する
+     * 長い文章でもWeb APIが途切れないよう、句点（。！？）や改行ごとに90文字前後のチャンクに分割する
+     */
+    private splitIntoChunks(cleanedText: string): string[] {
+        const rawSentences = cleanedText
+            .split(/(?<=[。！？!?\n])\s*/)
+            .map(s => s.replace(/\s+/g, ' ').trim())
+            .filter(s => s.length > 0);
+
+        const chunks: string[] = [];
+        let current = '';
+
+        for (const sentence of rawSentences) {
+            // 1文自体が100文字を超える場合は読点（、）でさらに分割
+            if (sentence.length > 100) {
+                if (current) {
+                    chunks.push(current);
+                    current = '';
+                }
+                const subParts = sentence.split(/(?<=[、，,])\s*/);
+                let subCurrent = '';
+                for (const part of subParts) {
+                    if ((subCurrent + part).length > 90 && subCurrent) {
+                        chunks.push(subCurrent);
+                        subCurrent = part;
+                    } else {
+                        subCurrent += part;
+                    }
+                }
+                if (subCurrent) chunks.push(subCurrent);
+                continue;
+            }
+
+            if ((current + sentence).length > 90 && current) {
+                chunks.push(current);
+                current = sentence;
+            } else {
+                current += (current ? ' ' : '') + sentence;
+            }
+        }
+        if (current) {
+            chunks.push(current);
+        }
+        return chunks;
+    }
+
+    /**
+     * ハコさんの返答をVOICEVOXで最後まで途切れず読み上げる（チャンク分割＋先読みプリフェッチ再生）
      */
     public async speak(rawText: string, force: boolean = false, overrideSpeakerId?: number): Promise<void> {
         if (!this.settings.enabled && !force) return;
 
-        const text = this.cleanTextForSpeech(rawText);
-        if (!text) return;
+        const cleaned = this.cleanTextForSpeech(rawText);
+        if (!cleaned) return;
+
+        const chunks = this.splitIntoChunks(cleaned);
+        if (chunks.length === 0) return;
 
         this.stop();
         const reqId = this.activeRequestId;
@@ -152,29 +198,71 @@ export class VoiceManager {
 
         const speaker = overrideSpeakerId ?? this.settings.speakerId;
 
-        // 1. まずローカルPCの VOICEVOX エンジン (http://127.0.0.1:50021) を試行
-        const playedLocal = await this.tryLocalVoicevox(text, speaker, reqId);
-        if (playedLocal || reqId !== this.activeRequestId) return;
+        try {
+            // チャンク1つ目の音声URL取得を開始
+            let nextUrlPromise: Promise<{ url: string; revoke: boolean; applyRate: boolean } | null> =
+                this.prepareChunkAudioUrl(chunks[0], speaker, reqId);
 
-        // 2. 次に Web版 VOICEVOX API (api.tts.quest) を合成完了までポーリングして再生
-        const playedWeb = await this.tryWebVoicevox(text, speaker, reqId);
-        if (playedWeb || reqId !== this.activeRequestId) return;
+            for (let i = 0; i < chunks.length; i++) {
+                if (reqId !== this.activeRequestId) return;
 
-        // 3. フォールバック：ブラウザ内蔵の音声合成（選んだキャラごとに声の高さ・速度を変化させる）
-        this.speakWithBrowserTTS(text, speaker);
+                // 現在のチャンクの音声準備完了を待つ
+                const audioInfo = await nextUrlPromise;
+                if (reqId !== this.activeRequestId) return;
+
+                // 現在のチャンクを再生開始する直前に、次のチャンクの音声合成を裏で先行リクエスト（プリフェッチ）！
+                if (i + 1 < chunks.length) {
+                    nextUrlPromise = this.prepareChunkAudioUrl(chunks[i + 1], speaker, reqId);
+                }
+
+                if (audioInfo) {
+                    await this.playAudioUrl(audioInfo.url, audioInfo.revoke, audioInfo.applyRate);
+                } else {
+                    // API制限等で取得できなかったチャンクはブラウザTTSで途切れず繋ぐ
+                    await this.speakWithBrowserTTSAsync(chunks[i], speaker, reqId);
+                }
+            }
+        } finally {
+            if (reqId === this.activeRequestId) {
+                this.setSpeaking(false);
+            }
+        }
     }
 
-    private async tryLocalVoicevox(text: string, speaker: number, reqId: number): Promise<boolean> {
+    /**
+     * 1チャンク分の音声URLを ローカルVOICEVOX → Web VOICEVOX の順で取得する
+     */
+    private async prepareChunkAudioUrl(
+        chunkText: string,
+        speaker: number,
+        reqId: number
+    ): Promise<{ url: string; revoke: boolean; applyRate: boolean } | null> {
+        // 1. ローカルVOICEVOX
+        const localUrl = await this.fetchLocalVoicevoxUrl(chunkText, speaker, reqId);
+        if (localUrl) {
+            return { url: localUrl, revoke: true, applyRate: false };
+        }
+        if (reqId !== this.activeRequestId) return null;
+
+        // 2. Web版 VOICEVOX (tts.quest)
+        const webUrl = await this.fetchWebVoicevoxUrl(chunkText, speaker, reqId);
+        if (webUrl) {
+            return { url: webUrl, revoke: false, applyRate: true };
+        }
+        return null;
+    }
+
+    private async fetchLocalVoicevoxUrl(text: string, speaker: number, reqId: number): Promise<string | null> {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 900);
+            const timeout = setTimeout(() => controller.abort(), 700);
 
             const queryRes = await fetch(
                 `http://127.0.0.1:50021/audio_query?text=${encodeURIComponent(text)}&speaker=${speaker}`,
                 { method: 'POST', signal: controller.signal }
             );
             clearTimeout(timeout);
-            if (!queryRes.ok || reqId !== this.activeRequestId) return false;
+            if (!queryRes.ok || reqId !== this.activeRequestId) return null;
 
             const queryJson = await queryRes.json();
             queryJson.speedScale = this.settings.speedScale;
@@ -187,112 +275,104 @@ export class VoiceManager {
                     body: JSON.stringify(queryJson)
                 }
             );
-            if (!synthRes.ok || reqId !== this.activeRequestId) return false;
+            if (!synthRes.ok || reqId !== this.activeRequestId) return null;
 
             const blob = await synthRes.blob();
-            const url = URL.createObjectURL(blob);
-            // ローカルVOICEVOXは queryJson.speedScale で既に速度反映済みなので playbackRate は 1.0 のままにする
-            await this.playAudioUrl(url, true, false);
-            return true;
+            return URL.createObjectURL(blob);
         } catch {
-            return false;
+            return null;
         }
     }
 
-    /**
-     * Web版 VOICEVOX API (tts.quest v3)
-     * サーバー側でMP3合成が完了するまで audioStatusUrl をポーリングしてから再生する
-     */
-    private async tryWebVoicevox(text: string, speaker: number, reqId: number): Promise<boolean> {
+    private async fetchWebVoicevoxUrl(text: string, speaker: number, reqId: number): Promise<string | null> {
         try {
-            const res = await fetch(
-                `https://api.tts.quest/v3/voicevox/synthesis?text=${encodeURIComponent(text)}&speaker=${speaker}`
-            );
-            if (!res.ok || reqId !== this.activeRequestId) return false;
-            const data = await res.json();
-            if (!data || !data.mp3StreamingUrl) return false;
+            // レート制限(retryAfter)が返ってきた場合は待機してリトライする
+            for (let attempt = 0; attempt < 2; attempt++) {
+                if (reqId !== this.activeRequestId) return null;
+                const res = await fetch(
+                    `https://api.tts.quest/v3/voicevox/synthesis?text=${encodeURIComponent(text)}&speaker=${speaker}`
+                );
+                if (!res.ok) return null;
+                const data = await res.json();
 
-            // audioStatusUrl がある場合、isAudioReady が true になるまで最大8秒待つ
-            if (data.audioStatusUrl) {
-                for (let i = 0; i < 16; i++) {
-                    if (reqId !== this.activeRequestId) return false;
-                    try {
-                        const statusRes = await fetch(data.audioStatusUrl);
-                        if (statusRes.ok) {
-                            const statusData = await statusRes.json();
-                            if (statusData.isAudioReady) {
-                                break;
-                            }
-                            if (statusData.isAudioError) {
-                                return false;
-                            }
-                        }
-                    } catch { /* ignore */ }
-                    await new Promise(r => setTimeout(r, 500));
+                if (data?.retryAfter && typeof data.retryAfter === 'number') {
+                    await new Promise(r => setTimeout(r, (data.retryAfter + 1) * 1000));
+                    continue;
                 }
-            } else {
-                await new Promise(r => setTimeout(r, 1200));
+
+                if (!data || !data.mp3StreamingUrl) return null;
+
+                if (data.audioStatusUrl) {
+                    for (let i = 0; i < 20; i++) {
+                        if (reqId !== this.activeRequestId) return null;
+                        try {
+                            const statusRes = await fetch(data.audioStatusUrl);
+                            if (statusRes.ok) {
+                                const statusData = await statusRes.json();
+                                if (statusData.isAudioReady) {
+                                    break;
+                                }
+                                if (statusData.isAudioError) {
+                                    return null;
+                                }
+                            }
+                        } catch { /* ignore */ }
+                        await new Promise(r => setTimeout(r, 450));
+                    }
+                } else {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+
+                return data.mp3DownloadUrl || data.mp3StreamingUrl;
             }
-
-            if (reqId !== this.activeRequestId) return false;
-
-            const playUrl = data.mp3DownloadUrl || data.mp3StreamingUrl;
-            await this.playAudioUrl(playUrl, false);
-            return true;
+            return null;
         } catch {
-            return false;
+            return null;
         }
     }
 
     private playAudioUrl(url: string, revokeOnEnd: boolean, applyPlaybackRate: boolean = true): Promise<void> {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             const audio = new Audio(url);
             if (applyPlaybackRate) {
                 audio.playbackRate = this.settings.speedScale;
             }
             this.currentAudio = audio;
 
-            audio.onended = () => {
+            const cleanup = () => {
                 if (revokeOnEnd) URL.revokeObjectURL(url);
-                this.currentAudio = null;
-                this.setSpeaking(false);
+                if (this.currentAudio === audio) {
+                    this.currentAudio = null;
+                }
                 resolve();
             };
 
-            audio.onerror = (err) => {
-                if (revokeOnEnd) URL.revokeObjectURL(url);
-                this.currentAudio = null;
-                this.setSpeaking(false);
-                reject(err);
-            };
-
-            audio.play().catch((err) => {
-                if (revokeOnEnd) URL.revokeObjectURL(url);
-                this.currentAudio = null;
-                this.setSpeaking(false);
-                reject(err);
-            });
+            audio.onended = cleanup;
+            audio.onerror = cleanup;
+            audio.play().catch(cleanup);
         });
     }
 
-    private speakWithBrowserTTS(text: string, speakerId: number): void {
-        if (!('speechSynthesis' in window)) {
-            this.setSpeaking(false);
-            return;
-        }
-        const speakerOption = VOICEVOX_SPEAKERS.find(s => s.id === speakerId) || VOICEVOX_SPEAKERS[0];
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = 'ja-JP';
-        utter.pitch = speakerOption.fallbackPitch;
-        utter.rate = Math.max(0.5, Math.min(2.0, speakerOption.fallbackRate * this.settings.speedScale));
+    private speakWithBrowserTTSAsync(text: string, speakerId: number, reqId: number): Promise<void> {
+        return new Promise((resolve) => {
+            if (!('speechSynthesis' in window) || reqId !== this.activeRequestId) {
+                resolve();
+                return;
+            }
+            const speakerOption = VOICEVOX_SPEAKERS.find(s => s.id === speakerId) || VOICEVOX_SPEAKERS[0];
+            const utter = new SpeechSynthesisUtterance(text);
+            utter.lang = 'ja-JP';
+            utter.pitch = speakerOption.fallbackPitch;
+            utter.rate = Math.max(0.5, Math.min(2.0, speakerOption.fallbackRate * this.settings.speedScale));
 
-        const voices = window.speechSynthesis.getVoices();
-        const jaVoice = voices.find(v => v.lang.includes('ja') && (v.name.includes('Nanami') || v.name.includes('Kyoko') || v.name.includes('Google')));
-        if (jaVoice) utter.voice = jaVoice;
+            const voices = window.speechSynthesis.getVoices();
+            const jaVoice = voices.find(v => v.lang.includes('ja') && (v.name.includes('Nanami') || v.name.includes('Kyoko') || v.name.includes('Google')));
+            if (jaVoice) utter.voice = jaVoice;
 
-        utter.onend = () => this.setSpeaking(false);
-        utter.onerror = () => this.setSpeaking(false);
-        window.speechSynthesis.speak(utter);
+            utter.onend = () => resolve();
+            utter.onerror = () => resolve();
+            window.speechSynthesis.speak(utter);
+        });
     }
 }
 
