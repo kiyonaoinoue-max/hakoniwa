@@ -39,7 +39,7 @@ function generateId(): string {
   return `${ts}_${rand}`;
 }
 
-/** 日本時間（JST = UTC+9）の日時情報を安全に取得するヘルパー */
+/** 日本時間（JST = Asia/Tokyo）の日時情報を環境に左右されず確実に取得するヘルパー */
 function getJstDate(timestamp?: number): {
   date: Date;
   isoDate: string;
@@ -49,7 +49,8 @@ function getJstDate(timestamp?: number): {
   dayOfWeek: number;
 } {
   const target = timestamp ? new Date(timestamp) : new Date();
-  const jstTime = new Date(target.getTime() + (9 * 60 + target.getTimezoneOffset()) * 60 * 1000);
+  const jstString = target.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+  const jstTime = new Date(jstString);
   const year = jstTime.getFullYear();
   const month = String(jstTime.getMonth() + 1).padStart(2, '0');
   const day = String(jstTime.getDate()).padStart(2, '0');
@@ -66,6 +67,11 @@ function getJstDate(timestamp?: number): {
     minute,
     dayOfWeek,
   };
+}
+
+/** 夜間・朝に昼食の話題が混入していないか判定する物理検閲フィルター */
+function containsForbiddenLunchTopic(text: string): boolean {
+  return /昼ご飯|昼食|ランチ|お昼ご飯|お昼の時間ですね|お昼は何にしましょう|何を食べましたか/.test(text);
 }
 
 /** リトライ付きAPI呼び出し */
@@ -200,9 +206,20 @@ async function saveState(state: BrainState): Promise<void> {
   await writeMemory(state);
 }
 
-/** 保存データのバリデーションとデフォルト値マージ */
+/** 保存データのバリデーションとデフォルト値マージ（誤学習した昼食時刻・時計修正ノイズ概念の自動クレンジング付き） */
 function validateAndMergeState(parsed: Record<string, unknown>): BrainState {
   const p = parsed as Record<string, any>;
+  const rawSemantics: Record<string, any> = { ...(p.semantics || {}) };
+
+  // 過去に「昼ご飯は12時」「今は20時」等の指摘で誤ってsemanticsに蓄積されたノイズ概念を自動除去
+  for (const [k, v] of Object.entries(rawSemantics)) {
+    const term = String(v?.term || k);
+    const def = String(v?.definition || '');
+    if (/昼ご飯|昼食|ランチ|お昼ご飯|現在時刻|時刻修正|時間修正|時差/.test(term) || /昼ご飯を聞く|昼食を聞く|12時.*昼/.test(def)) {
+      delete rawSemantics[k];
+    }
+  }
+
   return {
     ...INITIAL_STATE,
     ...p,
@@ -213,9 +230,7 @@ function validateAndMergeState(parsed: Record<string, unknown>): BrainState {
         ...(p.userModel?.patterns || {}),
       },
     },
-    semantics: {
-      ...(p.semantics || {}),
-    },
+    semantics: rawSemantics,
     episodes: Array.isArray(p.episodes) ? p.episodes : [],
     mealLog: Array.isArray(p.mealLog) ? p.mealLog : [],
     mealTrigger: {
@@ -662,9 +677,15 @@ function getMealHistory(state: BrainState, limit: number = 10): MealLogEntry[] {
   return state.mealLog.slice(-limit);
 }
 
-/** エピソード配列にJST日時タグ [MM/DD HH:mm] を付けてプロンプト用文字列にする */
-function formatEpisodesWithJst(episodes: EpisodicMemory[]): string {
-  return episodes
+/** エピソード配列にJST日時タグ [MM/DD HH:mm] を付けてプロンプト用文字列にする
+ *  filterOutLunchNoise=true の場合、夕方・夜に昼食の話題を引きずらないよう昼食関連エピソードを履歴から除外する
+ */
+function formatEpisodesWithJst(episodes: EpisodicMemory[], filterOutLunchNoise: boolean = false): string {
+  const targetEpisodes = filterOutLunchNoise
+    ? episodes.filter((ep) => !/🍽️|🍱|昼ご飯|昼食|ランチ|お昼の時間ですね|お昼は何にしましょう|何を食べましたか/.test(ep.content))
+    : episodes;
+
+  return targetEpisodes
     .map((ep) => {
       const epJst = getJstDate(ep.timestamp);
       const md = epJst.isoDate.slice(5).replace('-', '/');
@@ -816,8 +837,11 @@ export async function processInput(
   logSessionActivity(state);
 
   const jst = getJstDate(now);
-  // 昼食時間帯（11:00〜14:59）以外に会話した時は、残っている昼食回答待ちフラグを自動でクリアする（夜20時に昼食の話を蒸し返すのを防ぐ）
-  if ((jst.hour >= 15 || jst.hour < 11) && state.mealTrigger.awaitingMealResponse) {
+  const isOutsideLunchHours = jst.hour >= 15 || jst.hour < 11;
+  const userMentionedLunch = /昼ご飯|昼食|ランチ|お昼/.test(input);
+
+  // 昼食時間帯（11:00〜14:59）以外に会話した時は、残っている昼食回答待ちフラグを自動でクリアする
+  if (isOutsideLunchHours && state.mealTrigger.awaitingMealResponse) {
     state.mealTrigger.awaitingMealResponse = false;
   }
 
@@ -827,12 +851,15 @@ export async function processInput(
   let response = '';
 
   try {
-    // --- コンテキスト構築（各発言にJST日時タグを付与し、昼12時の発言を夜20時の今の発言と混同しないようにする） ---
-    const history = formatEpisodesWithJst(getRecentEpisodes(state, 20));
+    // --- コンテキスト構築（夕方・夜・朝でユーザーが昼食に言及していない場合は、過去ログから昼食ノイズを除外して渡す） ---
+    const history = formatEpisodesWithJst(
+      getRecentEpisodes(state, 20),
+      isOutsideLunchHours && !userMentionedLunch
+    );
 
     const activityContext = getActivitySummaryForPrompt(state);
     const conceptsForPrompt = getConceptsForPrompt(state);
-    const mealContext = getMealSummaryForPrompt(state);
+    const mealContext = (!isOutsideLunchHours || userMentionedLunch) ? getMealSummaryForPrompt(state) : '';
     const triggerStatusContext = getTriggerStatusForPrompt(state);
 
     // --- 天気・拠点情報の取得 ---
@@ -1093,6 +1120,12 @@ export async function generateMorningMessage(force: boolean = false): Promise<st
   const state = await loadState();
   const jst = getJstDate();
 
+  // GitHub Actionsの大幅遅延対策: forceでない限り、日本時間の朝(5:00〜10:59)以外は絶対に発火させない
+  if (!force && (jst.hour < 5 || jst.hour >= 11)) {
+    console.log(`[Morning] 朝の時間帯外 (${jst.hour}:${jst.minute} JST) のためスキップしました`);
+    return '';
+  }
+
   // 天気情報を取得（現在の拠点）
   const targetLocation = state.currentLocation || '熊本県';
   const weatherData = await fetchWeather(targetLocation);
@@ -1251,12 +1284,25 @@ export async function generateMealMessage(
   const minute = jst.minute;
   const today = jst.isoDate;
 
-  let message: string | null = null;
+  // 【最重要ガード】GitHub Actionsのcronが何時間遅延しても、日本時間の昼(11:00〜14:30)以外に昼食提案や昼食質問を絶対に送らない！
+  if (!force && (hour < 11 || hour >= 15 || (hour === 14 && minute > 30))) {
+    console.log(`[Meal] 昼食時間帯外 (${hour}:${String(minute).padStart(2, '0')} JST, subType=${subType}) のため強制ブロックしました`);
+    return null;
+  }
 
-  // 判定モードの決定
-  // subTypeが明示されている場合はそれを優先。なければ時間帯で判定
-  const isSuggestTime = subType === 'suggest' || (!subType && (hour === 11 || (hour === 12 && minute < 15)));
-  const isAskTime = subType === 'ask' || (!subType && ((hour === 12 && minute >= 15) || hour === 13 || (hour === 14 && minute <= 30)));
+  let message: string | null = null;
+  const customAskHour = state.mealTrigger.customAskHour ?? 12;
+
+  // 判定モードの決定（必ず現在の日本時間JSTが該当時間帯にあることもチェックする）
+  const inSuggestWindow = hour === 11 || (hour === 12 && minute < 15);
+  const inAskWindow = (hour >= customAskHour && hour <= Math.min(14, customAskHour + 2)) && !(hour === 12 && minute < 15 && subType === 'suggest');
+
+  const isSuggestTime = force
+    ? subType === 'suggest' || (!subType && inSuggestWindow)
+    : inSuggestWindow && (subType === 'suggest' || !subType);
+  const isAskTime = force
+    ? subType === 'ask' || (!subType && inAskWindow)
+    : inAskWindow && (subType === 'ask' || !subType);
 
   // --- 1. メニュー提案 (11:00-12:15頃) ---
   if (isSuggestTime) {
@@ -1361,9 +1407,16 @@ export async function generateCuriosityMessage(force: boolean = false): Promise<
 
   let message: string | null = null;
 
+  const fallbackQuestions = [
+    '💭 今日もお疲れ様でした！最近マスターの中で「これは面白い！」と思った新しい技術や言葉って何かありますか？ハコさんにも教えてほしいです！',
+    '💭 1日お疲れ様でした！お仕事や作業で、マスターが「これだけは大事にしているこだわり」って何かありますか？もっとマスターのことを知りたいです🏯',
+    '💭 こんばんは！今日1日の中で、一番ワクワクしたことや手応えを感じた出来事はありましたか？よかったら聞かせてくださいね！',
+  ];
+
   try {
     const conceptsForPrompt = getConceptsForPrompt(state);
-    const recentEpisodes = formatEpisodesWithJst(getRecentEpisodes(state, 8));
+    // 夜の質問タイムでは過去の昼食エピソードを完全に除外してプロンプトに渡す
+    const recentEpisodes = formatEpisodesWithJst(getRecentEpisodes(state, 8), true);
     const activityContext = getActivitySummaryForPrompt(state);
 
     const prompt = `
@@ -1382,12 +1435,12 @@ ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
 Instruction:
 Generate ONE engaging, thoughtful question to ask the user tonight.
 Hakoniwa wants to LEARN new things, understand the user better, or hear about their thoughts/experiences.
-IMPORTANT: It is currently NIGHT (${jst.hour}:00). Even if Recent Conversations contain lunch messages from 12:00, DO NOT ask about lunch (昼ご飯/ランチ) at night!
+IMPORTANT: It is currently NIGHT (${jst.hour}:00). DO NOT ask about lunch, meals, or food (昼ご飯/昼食/ランチ/食事)!
 
 Choose ONE of these angles naturally:
 1. 【新しい言葉・トレンド】: Ask about a word, tech trend, or concept the user might be interested in, or ask what words/topics they've been following lately.
 2. 【仕事や趣味のこだわり】: Ask about a specific tool, philosophy, habit, or routine they value in their work or daily life.
-3. 【過去に教わったことの深掘り】: If Learned Concepts exist, ask a deeper follow-up question about one of them.
+3. 【過去に教わったことの深掘り】: If Learned Concepts exist, ask a deeper follow-up question about one of them (excluding meals/time).
 4. 【今日の振り返り】: Ask what was the most interesting, challenging, or satisfying thing that happened today.
 
 Tone & Rules:
@@ -1408,18 +1461,18 @@ Output JSON ONLY:
     const json = extractJson(result);
 
     if (json && typeof json.response === 'string') {
-      message = `💭 ${json.response}`;
+      // 物理検閲フィルター：万が一AIが夜に「昼ご飯」「何を食べましたか」等を出力したら安全な質問に強制置換
+      if (containsForbiddenLunchTopic(json.response)) {
+        console.warn('[Curiosity] 昼食関連ワードを検出したためフォールバック質問に置換しました');
+        message = fallbackQuestions[Math.floor(Math.random() * fallbackQuestions.length)];
+      } else {
+        message = `💭 ${json.response}`;
+      }
       addEpisode(state, { speaker: 'ai', content: message });
       setEmotionalState(state, 'Joy', 5);
     }
   } catch (e) {
     console.error('Curiosity message generation failed:', e);
-    // フォールバック
-    const fallbackQuestions = [
-      '💭 今日もお疲れ様でした！最近マスターの中で「これは面白い！」と思った新しい技術や言葉って何かありますか？ハコさんにも教えてほしいです！',
-      '💭 1日お疲れ様でした！お仕事や作業で、マスターが「これだけは大事にしているこだわり」って何かありますか？もっとマスターのことを知りたいです🏯',
-      '💭 こんばんは！今日1日の中で、一番ワクワクしたことや手応えを感じた出来事はありましたか？よかったら聞かせてくださいね！',
-    ];
     message = fallbackQuestions[Math.floor(Math.random() * fallbackQuestions.length)];
     addEpisode(state, { speaker: 'ai', content: message });
     setEmotionalState(state, 'Joy', 5);
@@ -1465,7 +1518,6 @@ export async function generateEveningMessage(): Promise<string | null> {
     const weatherContext = getWeatherForPrompt(weatherData);
     const weatherRec = getRecommendationContext(weatherData);
     const activityContext = getActivitySummaryForPrompt(state);
-    const mealContext = getMealSummaryForPrompt(state);
     const currentEmotion = state.currentEmotion || 'Neutral';
     const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][jst.dayOfWeek];
     const recentRecs = getRecentRecommendations(state, 3)
@@ -1473,7 +1525,7 @@ export async function generateEveningMessage(): Promise<string | null> {
       .join('\n');
 
     const prompt = `
-You are "Hakoniwa", a personal AI that gives personalized evening recommendations.
+You are "Hakoniwa", a personal AI that gives personalized evening relaxation/activity recommendations.
 Current Time: ${jst.dateTimeStr}
 Day of Week: ${dayOfWeek}曜日
 
@@ -1481,18 +1533,18 @@ Context:
 ${weatherContext ? `Weather: ${weatherContext}` : '(No weather data)'}
 ${weatherRec ? `Weather Assessment: ${weatherRec}` : ''}
 ${activityContext ? `User Activity: ${activityContext}` : ''}
-${mealContext ? `Meal History: ${mealContext}` : ''}
 Current Mood: ${currentEmotion}
 ${recentRecs ? `Recent Recommendations (avoid repeating):\n${recentRecs}` : ''}
 
 Instruction:
-Generate ONE personalized recommendation for the user's evening/night.
+Generate ONE personalized recommendation for the user's evening/night relaxation or hobby time.
 Consider ALL available context (weather, mood, patterns, day of week) to make it feel personalized.
+IMPORTANT: Do NOT suggest or ask about lunch (昼ご飯/昼食/ランチ/お昼)! Focus on evening relaxation, music, hobbies, or rest.
 
 Examples of good recommendations:
-- 雨の金曜夜 → "今日は雨で肌寒いですね。温かいスープと映画でリラックスな夜はいかが？🎬"
-- 晴れの週末 → "明日は天気が良さそう！早起きして散歩すると気持ちいいかも🌅"
-- 平日の夜 → "今週も頑張りましたね。好きな音楽を聴きながらストレッチで体をほぐしましょう🎵"
+- 雨の金曜夜 → "今日は雨で肌寒いですね。温かい飲み物と映画でリラックスな夜はいかが？🎬"
+- 晴れの週末 → "明日は天気が良さそう！今夜はゆっくり休んで気分をリフレッシュしましょう🌅"
+- 平日の夜 → "今日もお仕事お疲れ様でした。好きな音楽を聴きながらストレッチで体をほぐしましょう🎵"
 
 Rules:
 - Be specific and actionable
@@ -1505,7 +1557,7 @@ Rules:
 Output JSON ONLY:
 {
   "recommendation": "おすすめテキスト",
-  "type": "activity" | "food" | "music" | "general",
+  "type": "activity" | "music" | "general",
   "reason": "なぜこれをおすすめしたか（1文）",
   "basedOn": ["weather", "mood", "pattern"],
   "emotion": "Joy" | "Calm" | "Surprise",
@@ -1516,12 +1568,15 @@ Output JSON ONLY:
     const json = extractJson(result);
 
     if (json && typeof json.recommendation === 'string') {
-      message = `🎯 今日のおすすめ\n${json.recommendation}`;
+      const recText = containsForbiddenLunchTopic(json.recommendation)
+        ? '今日もお仕事お疲れ様でした！好きな音楽や温かい飲み物でゆっくりリラックスしてくださいね🎵'
+        : json.recommendation;
+      message = `🎯 今日のおすすめ\n${recText}`;
 
       addRecommendation(state, {
         date: today,
         type: (json.type as string as Recommendation['type']) || 'general',
-        content: json.recommendation,
+        content: recText,
         reason: (json.reason as string) || '',
         basedOn: (json.basedOn as string[]) || ['general'],
       });

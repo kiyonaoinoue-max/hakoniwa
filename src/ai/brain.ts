@@ -181,12 +181,20 @@ export class Brain {
                 // --- Construct Prompt with Context ---
                 const jst = getJSTTimeParts(new Date(now));
                 const currentHour = jst.hour;
+                const isOutsideLunchHours = currentHour >= 15 || currentHour < 11;
+                const userMentionedLunch = /昼ご飯|昼食|ランチ|お昼/.test(input);
+
                 // 昼の時間を過ぎていたら（15時以降または11時前）、古い昼食返事待ちフラグを自動クリア
-                if ((currentHour >= 15 || currentHour < 11) && this.memory.isAwaitingMealResponse()) {
+                if (isOutsideLunchHours && this.memory.isAwaitingMealResponse()) {
                     this.memory.clearAwaitingMealResponse();
                 }
 
-                const history = this.memory.getRecentEpisodes(20)
+                const recentEps = this.memory.getRecentEpisodes(20);
+                const filteredEps = (isOutsideLunchHours && !userMentionedLunch)
+                    ? recentEps.filter(ep => !/🍽️|🍱|昼ご飯|昼食|ランチ|お昼の時間ですね|お昼は何にしましょう|何を食べましたか/.test(ep.content))
+                    : recentEps;
+
+                const history = filteredEps
                     .map(ep => {
                         const timeStr = new Date(ep.timestamp).toLocaleString('ja-JP', {
                             timeZone: 'Asia/Tokyo',
@@ -201,7 +209,7 @@ export class Brain {
 
                 const activityContext = this.memory.getActivitySummaryForPrompt();
                 const conceptsForPrompt = this.memory.getConceptsForPrompt();
-                const mealContext = this.memory.getMealSummaryForPrompt();
+                const mealContext = (!isOutsideLunchHours || userMentionedLunch) ? this.memory.getMealSummaryForPrompt() : '';
                 const weatherContext = weatherManager.getWeatherForPrompt();
                 const weatherRecommendation = weatherManager.getRecommendationContext();
                 const personalityContext = this.memory.getPersonalityForPrompt();
@@ -803,7 +811,6 @@ Output JSON ONLY:
                         const weatherContext = weatherManager.getWeatherForPrompt();
                         const weatherRec = weatherManager.getRecommendationContext();
                         const activityContext = this.memory.getActivitySummaryForPrompt();
-                        const mealContext = this.memory.getMealSummaryForPrompt();
                         const currentEmotion = this.memory.getState().currentEmotion || 'Neutral';
                         const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][jst.dayOfWeek];
                         const recentRecs = this.memory.getRecentRecommendations(3)
@@ -811,7 +818,7 @@ Output JSON ONLY:
                             .join('\n');
 
                         const prompt = `
-You are "Hakoniwa", a personal AI that gives personalized evening recommendations.
+You are "Hakoniwa", a personal AI that gives personalized evening relaxation/activity recommendations.
 Current Time (JST): ${jst.formatted}
 Day of Week: ${dayOfWeek}曜日
 
@@ -819,18 +826,18 @@ Context:
 ${weatherContext ? `Weather: ${weatherContext}` : '(No weather data)'}
 ${weatherRec ? `Weather Assessment: ${weatherRec}` : ''}
 ${activityContext ? `User Activity: ${activityContext}` : ''}
-${mealContext ? `Meal History: ${mealContext}` : ''}
 Current Mood: ${currentEmotion}
 ${recentRecs ? `Recent Recommendations (avoid repeating):\n${recentRecs}` : ''}
 
 Instruction:
-Generate ONE personalized recommendation for the user's evening/night.
+Generate ONE personalized recommendation for the user's evening/night relaxation or hobby time.
 Consider ALL available context (weather, mood, patterns, day of week) to make it feel personalized.
+IMPORTANT: Do NOT suggest or ask about lunch (昼ご飯/昼食/ランチ/お昼)!
 
 Examples of good recommendations:
-- 雨の金曜夜 → "今日は雨で肌寒いですね。温かいスープと映画でリラックスな夜はいかが？🎬"
-- 晴れの週末 → "明日は天気が良さそう！早起きして散歩すると気持ちいいかも🌅"
-- 平日の夜 → "今週も頑張りましたね。好きな音楽を聴きながらストレッチで体をほぐしましょう🎵"
+- 雨の金曜夜 → "今日は雨で肌寒いですね。温かい飲み物と映画でリラックスな夜はいかが？🎬"
+- 晴れの週末 → "明日は天気が良さそう！今夜はゆっくり休んで気分をリフレッシュしましょう🌅"
+- 平日の夜 → "今日もお仕事お疲れ様でした。好きな音楽を聴きながらストレッチで体をほぐしましょう🎵"
 
 Rules:
 - Be specific and actionable
@@ -843,7 +850,7 @@ Rules:
 Output JSON ONLY:
 {
   "recommendation": "おすすめテキスト",
-  "type": "activity" | "food" | "music" | "general",
+  "type": "activity" | "music" | "general",
   "reason": "なぜこれをおすすめしたか（1文）",
   "basedOn": ["weather", "mood", "pattern"],
   "emotion": "Joy" | "Calm" | "Surprise",

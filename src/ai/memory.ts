@@ -136,7 +136,18 @@ export class MemoryManager {
         }
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private validateAndMergeState(parsed: any): BrainState {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rawSemantics: Record<string, any> = { ...(parsed.semantics || {}) };
+        for (const [k, v] of Object.entries(rawSemantics)) {
+            const term = String(v?.term || k);
+            const def = String(v?.definition || '');
+            if (/昼ご飯|昼食|ランチ|お昼ご飯|現在時刻|時刻修正|時間修正|時差/.test(term) || /昼ご飯を聞く|昼食を聞く|12時.*昼/.test(def)) {
+                delete rawSemantics[k];
+            }
+        }
+
         // Deep merge validation to prevent crash on stale/corrupt data
         return {
             ...INITIAL_STATE,
@@ -148,9 +159,7 @@ export class MemoryManager {
                     ...(parsed.userModel?.patterns || {})
                 }
             },
-            semantics: {
-                ...(parsed.semantics || {})
-            },
+            semantics: rawSemantics,
             episodes: Array.isArray(parsed.episodes) ? parsed.episodes : [],
             mealLog: Array.isArray(parsed.mealLog) ? parsed.mealLog : [],
             mealTrigger: {
