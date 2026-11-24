@@ -1,14 +1,17 @@
 const DRIVE_CONNECTED_KEY = 'hakoniwa_drive_connected_v1';
 const OAUTH_TOKEN_KEY = 'hakoniwa_drive_oauth_token_v1';
+const MASTER_SESSION_KEY = 'hakoniwa_master_session_v1';
 
 export class DriveManager {
     private accessToken: string | null = null;
+    private masterSessionToken: string | null = null;
     private fileId: string | null = null;
     private readonly FILENAME = 'hakoniwa_memory.json';
 
     constructor() {
         try {
             this.accessToken = sessionStorage.getItem(OAUTH_TOKEN_KEY);
+            this.masterSessionToken = localStorage.getItem(MASTER_SESSION_KEY);
         } catch { /* ignore */ }
     }
 
@@ -22,20 +25,49 @@ export class DriveManager {
 
     public clearToken() {
         this.accessToken = null;
+        this.masterSessionToken = null;
         this.fileId = null;
         try {
             sessionStorage.removeItem(OAUTH_TOKEN_KEY);
             localStorage.removeItem(DRIVE_CONNECTED_KEY);
+            localStorage.removeItem(MASTER_SESSION_KEY);
         } catch { /* ignore */ }
     }
 
     public isAuthenticated(): boolean {
         try {
-            if (localStorage.getItem(DRIVE_CONNECTED_KEY) === 'true') {
+            if (this.masterSessionToken || this.accessToken) {
+                return true;
+            }
+            if (localStorage.getItem(DRIVE_CONNECTED_KEY) === 'true' && localStorage.getItem(MASTER_SESSION_KEY)) {
                 return true;
             }
         } catch { /* ignore */ }
         return this.accessToken !== null;
+    }
+
+    private getServerAuthHeaders(): Record<string, string> {
+        const headers: Record<string, string> = {
+            'Cache-Control': 'no-cache',
+        };
+        if (this.masterSessionToken) {
+            headers['x-hakoniwa-session'] = this.masterSessionToken;
+        }
+        if (this.accessToken) {
+            headers['Authorization'] = `Bearer ${this.accessToken}`;
+        }
+        return headers;
+    }
+
+    private captureMasterSessionHeader(res: Response): void {
+        const newSession = res.headers.get('x-hakoniwa-session');
+        if (newSession) {
+            this.masterSessionToken = newSession;
+            try {
+                localStorage.setItem(MASTER_SESSION_KEY, newSession);
+                localStorage.setItem(DRIVE_CONNECTED_KEY, 'true');
+            } catch { /* ignore */ }
+        }
     }
 
     private async request(path: string, options: RequestInit = {}) {
@@ -110,17 +142,17 @@ export class DriveManager {
 
     /**
      * Google Driveから記憶JSONを読み取る
-     * 1. まずサーバーサイド (/api/memory) 経由で唯一の固定ファイル (HAKONIWA_DRIVE_FILE_ID) を期限切れなしで取得
+     * 1. まずサーバーサイド (/api/memory) 経由で唯一の固定ファイル (HAKONIWA_DRIVE_FILE_ID) を取得（要Googleログイン認証）
      * 2. ローカル開発時等で /api/memory が使えない場合はブラウザのOAuthトークンで直接取得
      */
     public async readFileContent(): Promise<string> {
-        // 1. サーバーサイドの固定Driveファイル (Edge / Chrome / LINE 完全共通) から取得を試みる
         try {
             const serverRes = await fetch(`/api/memory?t=${Date.now()}`, {
                 method: 'GET',
                 cache: 'no-store',
-                headers: { 'Cache-Control': 'no-cache' },
+                headers: this.getServerAuthHeaders(),
             });
+            this.captureMasterSessionHeader(serverRes);
             if (serverRes.ok) {
                 const text = await serverRes.text();
                 if (text && text.trim().startsWith('{')) {
@@ -131,7 +163,6 @@ export class DriveManager {
             console.warn('Server /api/memory read fallback to direct OAuth:', err);
         }
 
-        // 2. フォールバック: クライアントOAuthで直接取得
         if (!this.fileId) {
             const id = await this.findMemoryFile();
             if (!id) throw new Error('File not found to read');
@@ -143,8 +174,6 @@ export class DriveManager {
 
     /**
      * Google Driveの記憶JSONを更新する
-     * 1. まずサーバーサイド (/api/memory) 経由で唯一の固定ファイル (HAKONIWA_DRIVE_FILE_ID) を更新（60分トークン切れなし！）
-     * 2. フォールバックとしてクライアントOAuthで直接更新
      */
     public async updateFileContent(content: string): Promise<void> {
         let serverSaved = false;
@@ -152,9 +181,13 @@ export class DriveManager {
             const serverRes = await fetch('/api/memory', {
                 method: 'POST',
                 cache: 'no-store',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    ...this.getServerAuthHeaders(),
+                    'Content-Type': 'application/json',
+                },
                 body: content,
             });
+            this.captureMasterSessionHeader(serverRes);
             if (serverRes.ok) {
                 serverSaved = true;
             }
@@ -162,7 +195,6 @@ export class DriveManager {
             console.warn('Server /api/memory write fallback to direct OAuth:', err);
         }
 
-        // OAuthトークンも有効なら念のためクライアント側ファイルも同期、またはサーバー保存成功なら完了
         if (serverSaved) {
             return;
         }
