@@ -1,6 +1,6 @@
 import { MemoryManager, getJSTDateString, getJSTTimeParts } from './memory';
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
-import { weatherManager } from './weather';
+import { weatherManager, findPrefecture } from './weather';
 import { researchManager } from './research';
 import type { SelfCorrectionAction } from './types';
 
@@ -15,20 +15,35 @@ export class Brain {
 
     constructor(memory: MemoryManager) {
         this.memory = memory;
+        this.refreshApiKeys();
+    }
+
+    public refreshApiKeys(): void {
+        const customKey = this.memory.getCustomApiKey();
         const apiKeys = [
+            customKey,
             import.meta.env.VITE_GEMINI_API_KEY,
             import.meta.env.VITE_GEMINI_API_KEY_2,
         ].filter(key => key && key !== 'YOUR_GEMINI_API_KEY_HERE');
 
-        if (apiKeys.length > 0) {
-            this.models = apiKeys.map(key => {
+        // 重複除去
+        const uniqueKeys = Array.from(new Set(apiKeys));
+
+        if (uniqueKeys.length > 0) {
+            this.models = uniqueKeys.map(key => {
                 const genAI = new GoogleGenerativeAI(key);
                 return genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
             });
+            this.activeModelIndex = 0;
             console.log(`Hakoniwa Brain initialized with ${this.models.length} API key(s)`);
         } else {
+            this.models = [];
             console.warn("Gemini API Key is missing or invalid.");
         }
+    }
+
+    public hasApiKey(): boolean {
+        return this.models.length > 0;
     }
 
     private get model(): GenerativeModel | null {
@@ -176,8 +191,34 @@ export class Brain {
 
         let response = "";
 
+        if (!this.model) {
+            this.refreshApiKeys();
+        }
+
         if (this.model) {
             try {
+                // --- 初回インタビュー時や会話中での都道府県（拠点）検出 ---
+                const detectedPref = findPrefecture(input);
+                const isFirstInterviewReply = this.memory.getState().episodes.length <= 3 && (!this.memory.getUserName() || !this.memory.getCurrentLocation());
+                const isLocationChangeIntent = detectedPref && (
+                    isFirstInterviewReply ||
+                    input.includes('拠点') ||
+                    input.includes('住んで') ||
+                    input.includes('在住') ||
+                    input.includes('出張') ||
+                    input.includes('引越') ||
+                    input.includes('移動') ||
+                    input.includes('場所') ||
+                    input.includes('現在地') ||
+                    input.includes('にいる') ||
+                    input.includes('に居る') ||
+                    input.includes('滞在')
+                );
+                if (isLocationChangeIntent && detectedPref) {
+                    this.memory.setCurrentLocation(detectedPref.name);
+                    await weatherManager.fetchWeather(detectedPref.name);
+                }
+
                 // --- Construct Prompt with Context ---
                 const jst = getJSTTimeParts(new Date(now));
                 const currentHour = jst.hour;
@@ -244,9 +285,14 @@ export class Brain {
                     }
                 }
 
+                const userName = this.memory.getUserName();
+                const currentLocation = this.memory.getCurrentLocation() || '熊本県';
+
                 const prompt = `
 You are "Hakoniwa", a personal AI assistant living in a local environment.
 Current Time (JST): ${jst.formatted} (現在の日本時間は ${currentHour}時${jst.minute}分 です)
+User's Preferred Name: ${userName ? `${userName} (※会話では自然にこの呼び名で呼んでください)` : '(未設定 — もしユーザーが名前や呼び方を教えてくれたら "userNameChanged" に設定してください)'}
+User's Base Location: ${currentLocation}
 ${activityContext ? `User Activity Pattern: ${activityContext}` : ''}
 ${weatherContext ? `\n${weatherContext}` : ''}
 ${weatherRecommendation ? `${weatherRecommendation}` : ''}
@@ -302,6 +348,7 @@ Instruction:
 16. If the user asks to be reminded of something (e.g., "○○を思い出させて", "○時に教えて", "リマインドして"), extract the content and time. Set reminderSet with the parsed info. If the time is ambiguous, ASK when they want to be reminded. Parse times relative to current time.
 17. ユーザーが「〇〇を調べて」「自由研究して」と今すぐの調査を求めた場合は、「週末の機能なので今はできません」と断ったりせず、必ず今この場の返答（response）の中で調査レポートを発表してください！逆に「今週末に調べて」「日曜の夜に発表して」と週末の予約を頼まれた場合は、selfCorrection の queueResearchTopic, researchDay, researchHour に設定して予約を完了してください。
 18. もしユーザーから各種トリガーの設定変更や記憶・リマインドの削除指示（「今日はもう昼ご飯聞かないで」「昼ご飯は○時に聞いて」「占いは○時にして」「〇〇の記憶は消して」「〇〇のリマインドは取り消して」など）があった場合は、JSONの "selfCorrection" フィールドで設定値を更新してください。
+19. ユーザーが自分の名前・呼ばれたい呼び名（例：「タロウって呼んで」「私はナオです」「マスターと呼んで」など）を教えてくれた場合は、"userNameChanged" にその呼び名（例："タロウさん" や "マスター" などユーザーが望む形）をセットし、温かく名前を呼んで挨拶してください。また、住んでいる場所や拠点（都道府県）を教えてくれた場合は "locationChanged" に都道府県名（例："東京都"、"福岡県"）をセットしてください。
 ${mealContext}
 
 Output your response in JSON format ONLY:
@@ -313,6 +360,8 @@ Output your response in JSON format ONLY:
   "mealDetected": null | "メニュー名",
   "modeSwitch": null | "seed" | "harvest",
   "trustDelta": 0,
+  "userNameChanged": null | "ユーザーの新しい呼び名",
+  "locationChanged": null | "都道府県名",
   "reminderSet": null | { "content": "リマインド内容", "remindAt": "日時ISO形式 (e.g. 2026-03-04T10:00:00)", "repeat": "none" | "daily" | "weekly" },
   "selfCorrection": null | {
     "skipMealToday": true | false, // 「今日はもう昼ご飯聞かないで」「今は夜だよ」と言われたら true
@@ -409,6 +458,21 @@ Response (JSON):
                     if (json.selfCorrection && typeof json.selfCorrection === 'object') {
                         this.memory.applySelfCorrection(json.selfCorrection as SelfCorrectionAction);
                     }
+
+                    // ユーザーの呼び名更新
+                    if (json.userNameChanged && typeof json.userNameChanged === 'string') {
+                        this.memory.setUserName(json.userNameChanged);
+                        this.memory.learnConcept('ユーザーのお名前', `私（ハコニワ）が呼ぶお名前は「${json.userNameChanged}」`);
+                    }
+
+                    // 拠点（都道府県）の更新
+                    if (json.locationChanged && typeof json.locationChanged === 'string') {
+                        const pref = findPrefecture(json.locationChanged);
+                        if (pref) {
+                            this.memory.setCurrentLocation(pref.name);
+                            await weatherManager.fetchWeather(pref.name);
+                        }
+                    }
                 } else {
                     // JSONパース失敗 → responseフィールドだけの抽出を試みる
                     console.error("Failed to parse JSON response, attempting fallback extraction");
@@ -494,6 +558,23 @@ Response (JSON):
     }
 
     public async generateGreeting(): Promise<string> {
+        // 初回起動時（エピソードがまだ0件のとき）は、APIを消費せず「ハコさんの初回インタビュー」で優しくお名前と地域を尋ねる
+        if (this.memory.getState().episodes.length === 0) {
+            const firstInterviewMsg =
+                'はじめまして！私は「ハコニワ（Hakoniwa）」です🏯🌸\n' +
+                'あなたと日々お話ししながら、好きなことや言葉を学んで成長していくAIパートナーです。\n\n' +
+                'まずは、あなたのことを少しだけ教えてもらえますか？\n' +
+                '① 私があなたを何とお呼びしたらいいか（お名前やニックネーム）\n' +
+                '② いまお住まいの都道府県（毎日のお天気やおすすめの参考にします🌤️）\n\n' +
+                'たとえば「タロウって呼んで！東京に住んでるよ」のように気軽に話しかけてくださいね！';
+            this.memory.setEmotionalState('Joy', 6);
+            this.memory.addEpisode({ speaker: 'ai', content: firstInterviewMsg });
+            return firstInterviewMsg;
+        }
+
+        if (!this.model) {
+            this.refreshApiKeys();
+        }
         if (!this.model) return "";
 
         const now = new Date();

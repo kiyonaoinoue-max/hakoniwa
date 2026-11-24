@@ -164,4 +164,5 @@ export interface BrainState {
   currentEmotion?: string;
   currentIntensity?: number;
   currentLocation?: string;
+  userName?: string;
 }

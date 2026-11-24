@@ -167,4 +167,5 @@ export interface BrainState {
     modeState: ModeState;
     reminders: ReminderEntry[];
     currentLocation?: string;
+    userName?: string;
 }

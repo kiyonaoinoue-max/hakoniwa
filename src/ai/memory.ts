@@ -1,6 +1,8 @@
 import type { BrainState, EpisodicMemory, Semantics, ActivityLogEntry, ActivityStats, MealLogEntry, Recommendation, PersonalityVector, InteractionMode, ReminderEntry, SelfCorrectionAction, ResearchNote, ResearchTriggerState } from './types';
 
 const STORAGE_KEY = 'hakoniwa_ai_memory_v1';
+const CUSTOM_API_KEY_STORAGE = 'hakoniwa_custom_gemini_key';
+const LOCAL_MODE_STORAGE = 'hakoniwa_local_mode';
 
 // 日本時間 (Asia/Tokyo) で YYYY-MM-DD を取得するヘルパー
 export function getJSTDateString(date: Date = new Date()): string {
@@ -96,7 +98,73 @@ export class MemoryManager {
         return driveManager.isAuthenticated();
     }
 
+    public isLocalMode(): boolean {
+        return localStorage.getItem(LOCAL_MODE_STORAGE) === 'true';
+    }
+
+    public enableLocalMode(): void {
+        localStorage.setItem(LOCAL_MODE_STORAGE, 'true');
+    }
+
+    public disableLocalMode(): void {
+        localStorage.removeItem(LOCAL_MODE_STORAGE);
+    }
+
+    public getCustomApiKey(): string {
+        return (localStorage.getItem(CUSTOM_API_KEY_STORAGE) || '').trim();
+    }
+
+    public setCustomApiKey(key: string): void {
+        const trimmed = key.trim();
+        if (trimmed) {
+            localStorage.setItem(CUSTOM_API_KEY_STORAGE, trimmed);
+        } else {
+            localStorage.removeItem(CUSTOM_API_KEY_STORAGE);
+        }
+    }
+
+    public getUserName(): string | undefined {
+        return this.state.userName;
+    }
+
+    public setUserName(name: string): void {
+        const cleaned = name.trim();
+        if (cleaned) {
+            this.state.userName = cleaned;
+            this.save();
+        }
+    }
+
+    public getCurrentLocation(): string | undefined {
+        return this.state.currentLocation;
+    }
+
+    public setCurrentLocation(location: string): void {
+        const cleaned = location.trim();
+        if (cleaned) {
+            this.state.currentLocation = cleaned;
+            this.save();
+        }
+    }
+
+    public exportMemoryJson(): string {
+        return JSON.stringify(this.state, null, 2);
+    }
+
+    public importMemoryJson(rawJson: string): boolean {
+        try {
+            const parsed = JSON.parse(rawJson);
+            this.state = this.validateAndMergeState(parsed);
+            this.save();
+            return true;
+        } catch (e) {
+            console.error('Failed to import memory JSON:', e);
+            return false;
+        }
+    }
+
     public async connectDrive(token: string): Promise<void> {
+        this.disableLocalMode();
         driveManager.setToken(token);
         await this.loadFromDrive();
     }
@@ -196,8 +264,26 @@ export class MemoryManager {
     private saveTimeout: number | null = null;
 
     public save(): void {
+        // ブラウザのlocalStorage容量(約5MB)パンク防止:
+        // 写真(imageUrl)は最新の10枚だけ保持し、11枚目より古い写真は会話テキストのみ残して画像データを自動整理する
+        let imageCount = 0;
+        for (let i = this.state.episodes.length - 1; i >= 0; i--) {
+            if (this.state.episodes[i].imageUrl) {
+                imageCount++;
+                if (imageCount > 10) {
+                    delete this.state.episodes[i].imageUrl;
+                }
+            }
+        }
+
         // 1. Immediately save to local storage (fast, reliable fallback)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+        } catch (err) {
+            console.warn('localStorage quota warning, trimming oldest images:', err);
+            this.state.episodes.forEach(ep => { delete ep.imageUrl; });
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+        }
 
         // 2. Debounced save to Google Drive (if connected)
         if (driveManager.isAuthenticated()) {

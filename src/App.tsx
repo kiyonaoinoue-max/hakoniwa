@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { memoryManager } from './ai/memory';
 import { Brain } from './ai/brain';
 import { weatherManager } from './ai/weather';
@@ -6,7 +6,7 @@ import type { WeatherData } from './ai/weather';
 import { ChatInterface } from './components/ChatInterface';
 import { HakoniwaSphere } from './components/HakoniwaSphere';
 import { Atmosphere } from './components/Atmosphere';
-import { GoogleLoginScreen } from './components/GoogleLoginScreen';
+import { GoogleLoginScreen, ApiKeyGuideModal } from './components/GoogleLoginScreen';
 import type { BrainState } from './ai/types';
 
 function App() {
@@ -15,23 +15,33 @@ function App() {
 
   // State for re-rendering UI when Brain updates
   const [brainState, setBrainState] = useState<BrainState | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(memoryManager.isDriveConnected());
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    memoryManager.isDriveConnected() || memoryManager.isLocalMode()
+  );
   const [isInitializing, setIsInitializing] = useState(false);
   const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const backupInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // If already authenticated (e.g., token persisted or just connected), initialize memory
+    // If already authenticated (e.g., token persisted or local mode), initialize memory
     if (isAuthenticated) {
       let isMounted = true;
       const init = async () => {
         setIsInitializing(true);
         await memoryManager.initialize();
+        brain.refreshApiKeys();
 
-        // Fetch weather
-        const weatherData = await weatherManager.fetchWeather();
+        // Fetch weather (using saved location if available)
+        const savedLocation = memoryManager.getCurrentLocation();
+        const weatherData = await weatherManager.fetchWeather(savedLocation);
         if (weatherData && isMounted) setWeather(weatherData);
 
         if (isMounted) {
+          // もし全くの初回起動（会話履歴が0件）なら、待ち時間0秒ですぐにハコさんの初回インタビュー挨拶を表示する
+          if (brain.getMemoryState().episodes.length === 0) {
+            await brain.generateGreeting();
+          }
           setBrainState({ ...brain.getMemoryState() });
           setIsInitializing(false);
 
@@ -112,17 +122,60 @@ function App() {
 
   const handleUpdate = () => {
     setBrainState({ ...brain.getMemoryState() });
+    const latestWeather = weatherManager.getCurrentWeather();
+    if (latestWeather) setWeather({ ...latestWeather });
   };
 
   const handleLoginSuccess = async (token: string) => {
     setIsInitializing(true);
     await memoryManager.connectDrive(token);
     setIsAuthenticated(true);
-    // The useEffect will catch the isAuthenticated change and load the state
+  };
+
+  const handleStartLocalMode = (apiKey: string) => {
+    if (apiKey) {
+      memoryManager.setCustomApiKey(apiKey);
+    }
+    memoryManager.enableLocalMode();
+    brain.refreshApiKeys();
+    setIsAuthenticated(true);
+  };
+
+  const handleExportMemory = () => {
+    const json = memoryManager.exportMemoryJson();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `hakoniwa_memory_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportMemory = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const content = ev.target?.result as string;
+      if (content && memoryManager.importMemoryJson(content)) {
+        setBrainState({ ...brain.getMemoryState() });
+        alert('記憶データを復元しました！🏯');
+      } else {
+        alert('記憶データの読み込みに失敗しました。ファイル形式を確認してください。');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   if (!isAuthenticated) {
-    return <GoogleLoginScreen onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <GoogleLoginScreen
+        onLoginSuccess={handleLoginSuccess}
+        onStartLocalMode={handleStartLocalMode}
+      />
+    );
   }
 
   if (isInitializing || !brainState) {
@@ -307,6 +360,42 @@ function App() {
               )}
             </div>
           </div>
+
+          {/* APIキー設定 & 記憶バックアップ カード */}
+          <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-3 flex flex-col gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setShowApiKeyModal(true)}
+              className="w-full py-1.5 px-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 flex items-center justify-center gap-1.5 transition"
+            >
+              <span>🔑 APIキー設定・取得ガイド</span>
+            </button>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={handleExportMemory}
+                title="記憶データをJSONファイルとしてダウンロード保存します"
+                className="flex-1 py-1.5 px-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-slate-200 text-[11px] transition"
+              >
+                📦 記憶を保存
+              </button>
+              <button
+                type="button"
+                onClick={() => backupInputRef.current?.click()}
+                title="保存した記憶データ(JSON)を読み込んで復元します"
+                className="flex-1 py-1.5 px-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-slate-200 text-[11px] transition"
+              >
+                📂 記憶を復元
+              </button>
+              <input
+                ref={backupInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={handleImportMemory}
+                className="hidden"
+              />
+            </div>
+          </div>
         </div>
 
         {/* Main Chat Area */}
@@ -314,6 +403,17 @@ function App() {
           <ChatInterface brain={brain} onUpdate={handleUpdate} brainState={brainState} />
         </div>
       </div>
+
+      <ApiKeyGuideModal
+        isOpen={showApiKeyModal}
+        onClose={() => setShowApiKeyModal(false)}
+        showInput={true}
+        currentKey={memoryManager.getCustomApiKey()}
+        onSaveKey={(newKey) => {
+          memoryManager.setCustomApiKey(newKey);
+          brain.refreshApiKeys();
+        }}
+      />
     </>
   );
 }
