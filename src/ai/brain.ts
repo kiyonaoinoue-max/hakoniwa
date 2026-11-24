@@ -20,11 +20,17 @@ export class Brain {
 
     public refreshApiKeys(): void {
         const customKey = this.memory.getCustomApiKey();
-        const apiKeys = [
-            customKey,
-            import.meta.env.VITE_GEMINI_API_KEY,
-            import.meta.env.VITE_GEMINI_API_KEY_2,
-        ].filter(key => key && key !== 'YOUR_GEMINI_API_KEY_HERE');
+        const isLocalOnly = this.memory.isLocalMode() && !this.memory.isDriveConnected();
+
+        // ブラウザ保存モード（他の人が使うモード）では、必ずその人が入力したAPIキーのみを使用し、
+        // マスターの環境変数APIキー（VITE_GEMINI_API_KEY）はGoogle Driveログイン時のみ使用する
+        const apiKeys = isLocalOnly
+            ? [customKey].filter(Boolean)
+            : [
+                customKey,
+                import.meta.env.VITE_GEMINI_API_KEY,
+                import.meta.env.VITE_GEMINI_API_KEY_2,
+            ].filter(key => key && key !== 'YOUR_GEMINI_API_KEY_HERE');
 
         // 重複除去
         const uniqueKeys = Array.from(new Set(apiKeys));

@@ -173,11 +173,9 @@ export function GoogleLoginScreen({ onLoginSuccess, onStartLocalMode }: GoogleLo
         e.preventDefault();
         setError(null);
         const trimmed = apiKey.trim();
-        const envKey = import.meta.env.VITE_GEMINI_API_KEY;
-        const hasEnvKey = Boolean(envKey && envKey !== 'YOUR_GEMINI_API_KEY_HERE');
 
-        if (!trimmed && !hasEnvKey) {
-            setError('Gemini APIキーを入力してください（「❓ 取得方法」から1分で無料取得できます）');
+        if (!trimmed) {
+            setError('Gemini APIキーを入力してください（「❓ APIキーの取得方法（1分）」から無料で発行できます）');
             return;
         }
         onStartLocalMode(trimmed);

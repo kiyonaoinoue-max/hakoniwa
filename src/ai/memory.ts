@@ -51,9 +51,8 @@ const INITIAL_STATE: BrainState = {
     researchTrigger: {
         lastResearchDate: '',
         disabled: false,
-        queuedTopic: '金相場の年末年始の動向',
-        preferredDay: 'sun',
-        preferredHour: 19
+        preferredDay: 'both',
+        preferredHour: 10
     },
     personality: {
         humor: 0.3,
