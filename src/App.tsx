@@ -21,6 +21,8 @@ function App() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [isSyncingDrive, setIsSyncingDrive] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -107,11 +109,29 @@ function App() {
             }
           }, 60000);
 
+          // 別ブラウザ(Edge ⇄ Chrome)やLINEから戻ってきた時に自動でGoogle Driveの最新記憶を取得してマージする
+          const handleFocusSync = async () => {
+            if (!isMounted || memoryManager.isLocalMode() || !memoryManager.isDriveConnected()) return;
+            const ok = await memoryManager.syncWithDrive();
+            if (ok && isMounted) {
+              setBrainState({ ...brain.getMemoryState() });
+            }
+          };
+          const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+              void handleFocusSync();
+            }
+          };
+          window.addEventListener('focus', handleFocusSync);
+          document.addEventListener('visibilitychange', handleVisibilityChange);
+
           // Cleanup interval on unmount
           return () => {
             isMounted = false;
             clearInterval(reminderInterval);
             clearInterval(triggerInterval);
+            window.removeEventListener('focus', handleFocusSync);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
           };
         }
       };
@@ -139,6 +159,21 @@ function App() {
     memoryManager.enableLocalMode();
     brain.refreshApiKeys();
     setIsAuthenticated(true);
+  };
+
+  const handleManualDriveSync = async () => {
+    setIsSyncingDrive(true);
+    setSyncMessage(null);
+    const ok = await memoryManager.syncWithDrive();
+    setIsSyncingDrive(false);
+    if (ok) {
+      setBrainState({ ...brain.getMemoryState() });
+      setSyncMessage('✅ 同期・統合完了！');
+      setTimeout(() => setSyncMessage(null), 3000);
+    } else {
+      setSyncMessage('⚠️ 同期できませんでした');
+      setTimeout(() => setSyncMessage(null), 3000);
+    }
   };
 
   const handleExportMemory = () => {
@@ -363,6 +398,17 @@ function App() {
 
           {/* APIキー設定 & 記憶バックアップ カード */}
           <div className="w-full bg-[rgba(30,30,35,0.6)] backdrop-blur-md rounded-2xl border border-[rgba(255,255,255,0.1)] p-3 flex flex-col gap-2 text-xs">
+            {memoryManager.isDriveConnected() && !memoryManager.isLocalMode() && (
+              <button
+                type="button"
+                onClick={handleManualDriveSync}
+                disabled={isSyncingDrive}
+                title="Edge・Chrome・LINEの記憶をGoogle Drive経由で今すぐ合体・同期します"
+                className="w-full py-1.5 px-3 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-200 flex items-center justify-center gap-1.5 transition font-medium"
+              >
+                <span>{isSyncingDrive ? '🔄 クラウド同期中...' : (syncMessage || '☁️ Drive記憶を同期・統合')}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowApiKeyModal(true)}

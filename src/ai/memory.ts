@@ -174,21 +174,186 @@ export class MemoryManager {
         this.state = this.loadFromLocal();
     }
 
+    /**
+     * Google Driveから最新の記憶を取得し、現在のブラウザ(Edge/Chrome)のローカル記憶とスマートマージする
+     * （片方のブラウザにしか無かった会話や知識を消さずに両方合体させ、差分があればDriveにも書き戻す）
+     */
+    public async syncWithDrive(): Promise<boolean> {
+        if (!driveManager.isAuthenticated() || this.isLocalMode()) {
+            return false;
+        }
+        await this.loadFromDrive();
+        return true;
+    }
+
     private async loadFromDrive(): Promise<void> {
         try {
             const content = await driveManager.readFileContent();
             if (content) {
                 const parsed = JSON.parse(content);
-                this.state = this.validateAndMergeState(parsed);
-                // Also update local storage as backup
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
-                console.log("Memory loaded from Google Drive.");
+                const remoteState = this.validateAndMergeState(parsed);
+                const localState = this.state;
+
+                const prevRemoteEpCount = remoteState.episodes.length;
+                const prevRemoteSemCount = Object.keys(remoteState.semantics).length;
+
+                // ローカル(Edge/Chrome)の記憶とGoogle Driveの記憶をスマートマージ！
+                this.state = this.mergeBrainStates(localState, remoteState);
+
+                // ローカルストレージを更新
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+                } catch { /* ignore quota */ }
+
+                // もしローカルブラウザ側にだけ存在していた会話や知識が合体された場合は、即座にGoogle Drive側も更新して統一する
+                if (
+                    this.state.episodes.length > prevRemoteEpCount ||
+                    Object.keys(this.state.semantics).length > prevRemoteSemCount
+                ) {
+                    console.log('Merged local-only memories into Google Drive...');
+                    await driveManager.updateFileContent(JSON.stringify(this.state));
+                }
+
+                console.log(`Memory synced & merged with Google Drive (episodes: ${this.state.episodes.length}).`);
             }
-        } catch (e: any) {
-            console.error("Failed to load memory from Drive. It might not exist yet.", e.message);
-            // If it doesn't exist yet, we stick with current state (loaded from local)
-            // It will be created on first save
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error("Failed to load memory from Drive. It might not exist yet.", msg);
         }
+    }
+
+    /**
+     * 2つのBrainState（例：Edgeのローカル記憶 と Google Drive / Chromeの記憶）をデータ消失なしで統合する
+     */
+    private mergeBrainStates(local: BrainState, remote: BrainState): BrainState {
+        // 1. エピソード (episodes) の時系列マージ（IDまたは同一発言+5秒以内は重複排除）
+        const epMap = new Map<string, EpisodicMemory>();
+        const addEpIfUnique = (ep: EpisodicMemory) => {
+            if (!ep || !ep.content) return;
+            if (epMap.has(ep.id)) {
+                const existing = epMap.get(ep.id)!;
+                if (!existing.imageUrl && ep.imageUrl) {
+                    existing.imageUrl = ep.imageUrl;
+                }
+                return;
+            }
+            // IDが違っても5秒以内に全く同じspeaker・contentがあれば重複とみなす
+            for (const existing of epMap.values()) {
+                if (
+                    existing.speaker === ep.speaker &&
+                    existing.content === ep.content &&
+                    Math.abs((existing.timestamp || 0) - (ep.timestamp || 0)) < 5000
+                ) {
+                    return;
+                }
+            }
+            epMap.set(ep.id, { ...ep });
+        };
+
+        remote.episodes.forEach(addEpIfUnique);
+        local.episodes.forEach(addEpIfUnique);
+        const mergedEpisodes = Array.from(epMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+        // 2. 学習済み概念 (semantics) のマージ
+        const mergedSemantics: Record<string, Semantics> = { ...remote.semantics };
+        for (const [key, localSem] of Object.entries(local.semantics)) {
+            const remoteSem = mergedSemantics[key];
+            if (!remoteSem) {
+                mergedSemantics[key] = localSem;
+            } else if ((localSem.lastUpdated || 0) > (remoteSem.lastUpdated || 0) || localSem.definition.length > remoteSem.definition.length) {
+                mergedSemantics[key] = localSem;
+            }
+        }
+
+        // 3. 食事ログ (mealLog) のマージ
+        const mealMap = new Map<string, MealLogEntry>();
+        [...remote.mealLog, ...local.mealLog].forEach((m) => {
+            if (m && m.id && !mealMap.has(m.id)) {
+                mealMap.set(m.id, m);
+            }
+        });
+        const mergedMealLog = Array.from(mealMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+        // 4. おすすめ (recommendations) のマージ
+        const recMap = new Map<string, Recommendation>();
+        [...(remote.recommendations || []), ...(local.recommendations || [])].forEach((r) => {
+            if (r && r.id && !recMap.has(r.id)) {
+                recMap.set(r.id, r);
+            }
+        });
+        const mergedRecommendations = Array.from(recMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+        // 5. 自由研究ノート (researchNotes) のマージ
+        const resMap = new Map<string, ResearchNote>();
+        [...(remote.researchNotes || []), ...(local.researchNotes || [])].forEach((n) => {
+            if (n && n.id && !resMap.has(n.id)) {
+                resMap.set(n.id, n);
+            }
+        });
+        const mergedResearchNotes = Array.from(resMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+        // 6. リマインダー (reminders) のマージ（done/notifiedが進んでいる方を優先）
+        const remMap = new Map<string, ReminderEntry>();
+        [...(remote.reminders || []), ...(local.reminders || [])].forEach((r) => {
+            if (!r || !r.id) return;
+            const prev = remMap.get(r.id);
+            if (!prev) {
+                remMap.set(r.id, r);
+            } else {
+                remMap.set(r.id, {
+                    ...prev,
+                    ...r,
+                    done: Boolean(prev.done || r.done),
+                    notified: Boolean(prev.notified || r.notified),
+                });
+            }
+        });
+        const mergedReminders = Array.from(remMap.values());
+
+        // 7. Personality / ModeState は更新回数が多い最新の方をベースにする
+        const useLocalPersonality = (local.personality?.updateCount || 0) > (remote.personality?.updateCount || 0);
+        const localTotalModes = (local.modeState?.totalSeedCount || 0) + (local.modeState?.totalHarvestCount || 0);
+        const remoteTotalModes = (remote.modeState?.totalSeedCount || 0) + (remote.modeState?.totalHarvestCount || 0);
+        const useLocalMode = localTotalModes > remoteTotalModes;
+
+        const latestEp = mergedEpisodes[mergedEpisodes.length - 1];
+
+        return this.validateAndMergeState({
+            ...remote,
+            ...local,
+            currentEmotion: latestEp?.emotion || remote.currentEmotion || local.currentEmotion,
+            currentLocation: remote.currentLocation || local.currentLocation,
+            userName: remote.userName || local.userName,
+            episodes: mergedEpisodes,
+            semantics: mergedSemantics,
+            mealLog: mergedMealLog,
+            recommendations: mergedRecommendations,
+            researchNotes: mergedResearchNotes,
+            reminders: mergedReminders,
+            personality: useLocalPersonality ? local.personality : remote.personality,
+            modeState: useLocalMode ? local.modeState : remote.modeState,
+            mealTrigger: {
+                ...remote.mealTrigger,
+                ...local.mealTrigger,
+                lastAskedDate: [remote.mealTrigger?.lastAskedDate || '', local.mealTrigger?.lastAskedDate || ''].sort().pop() || '',
+                lastSuggestedDate: [remote.mealTrigger?.lastSuggestedDate || '', local.mealTrigger?.lastSuggestedDate || ''].sort().pop() || '',
+            },
+            fortuneTrigger: {
+                ...remote.fortuneTrigger,
+                ...local.fortuneTrigger,
+                lastFortuneDate: [remote.fortuneTrigger?.lastFortuneDate || '', local.fortuneTrigger?.lastFortuneDate || ''].sort().pop() || '',
+            },
+            recommendationTrigger: {
+                ...remote.recommendationTrigger,
+                ...local.recommendationTrigger,
+                lastRecommendationDate: [remote.recommendationTrigger?.lastRecommendationDate || '', local.recommendationTrigger?.lastRecommendationDate || ''].sort().pop() || '',
+            },
+            researchTrigger: {
+                ...remote.researchTrigger,
+                ...local.researchTrigger,
+                lastResearchDate: [remote.researchTrigger?.lastResearchDate || '', local.researchTrigger?.lastResearchDate || ''].sort().pop() || '',
+            },
+        });
     }
 
     private loadFromLocal(): BrainState {
@@ -285,19 +450,29 @@ export class MemoryManager {
         }
 
         // 2. Debounced save to Google Drive (if connected)
-        if (driveManager.isAuthenticated()) {
+        if (driveManager.isAuthenticated() && !this.isLocalMode()) {
             if (this.saveTimeout) {
                 clearTimeout(this.saveTimeout);
             }
             this.saveTimeout = window.setTimeout(async () => {
                 try {
                     console.log("Syncing memory to Google Drive...");
+                    // 書き込む直前にもDrive上の最新状態を読み取ってスマートマージすることで、別ブラウザ(Edge/Chrome/LINE)の会話を上書き消去するのを防ぐ
+                    try {
+                        const remoteRaw = await driveManager.readFileContent();
+                        if (remoteRaw) {
+                            const remoteParsed = this.validateAndMergeState(JSON.parse(remoteRaw));
+                            this.state = this.mergeBrainStates(this.state, remoteParsed);
+                            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+                        }
+                    } catch { /* ignore read error before write */ }
+
                     await driveManager.updateFileContent(JSON.stringify(this.state));
                     console.log("Memory synced to Drive successfully.");
                 } catch (e) {
                     console.error("Failed to sync memory to Drive:", e);
                 }
-            }, 3000); // 3 seconds debounce
+            }, 800); // 0.8 seconds debounce for fast cross-browser sync
         }
     }
 
